@@ -1,8 +1,14 @@
 """
-ANOKHA OTP STORE — FIXED & FINAL
-Fix: 409 Conflict resolved, single instance, webhook cleared
+╔══════════════════════════════════════════════════════════════╗
+║   OTPKING PRO — DUAL API (5sim + SMS-Activate)             ║
+║   • Auto fallback: 5sim → SMS-Activate if stock empty      ║
+║   • Live prices from both APIs + 40% margin                ║
+║   • 4 Channels + 1 Group force join                        ║
+║   • USDT + UPI deposit                                     ║
+║   • Auto proof, gaali ban, admin panel                     ║
+╚══════════════════════════════════════════════════════════════╝
 """
-import os, logging, requests, time, math, sys
+import os, logging, requests, time, math, io
 from pymongo import MongoClient
 from telebot import types
 import telebot
@@ -10,67 +16,119 @@ from dotenv import load_dotenv
 from threading import Thread
 from datetime import datetime
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler()]
+)
 logger = logging.getLogger(__name__)
-
 load_dotenv()
-BOT_TOKEN          = os.getenv('BOT_TOKEN')
-MONGO_URI          = os.getenv('MONGO_URI') or os.getenv('MONGO_URL')  # both names supported
-SIM_API_KEY        = os.getenv('SIM_API_KEY')
-OWNER_ID           = int(os.getenv('OWNER_ID'))
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CONFIG
+# ══════════════════════════════════════════════════════════════════════════════
+BOT_TOKEN          = os.getenv('BOT_TOKEN', '')
+MONGO_URI          = os.getenv('MONGO_URI') or os.getenv('MONGO_URL', '')
+SIM_API_KEY        = os.getenv('SIM_API_KEY', '')        # 5sim.net
+SMS_ACT_KEY        = os.getenv('SMS_ACTIVATE_KEY', '')   # sms-activate.org
+OWNER_ID           = int(os.getenv('OWNER_ID', '0'))
 SUPPORT_BOT        = os.getenv('SUPPORT_BOT', '@YourHelpBot')
-CHANNEL_ID         = os.getenv('CHANNEL_ID', '@YourChannel')
-CHANNEL_LINK       = os.getenv('CHANNEL_LINK', 'https://t.me/YourChannel')
+PROOF_CHANNEL_ID   = os.getenv('PROOF_CHANNEL_ID', '@ProofChannel')
+PROOF_CHANNEL_LINK = os.getenv('PROOF_CHANNEL_LINK', 'https://t.me/ProofChannel')
 GROUP_ID           = os.getenv('GROUP_ID', '@YourGroup')
 GROUP_LINK         = os.getenv('GROUP_LINK', 'https://t.me/YourGroup')
-PROOF_CHANNEL_ID   = os.getenv('PROOF_CHANNEL_ID', '@YourProofChannel')
-PROOF_CHANNEL_LINK = os.getenv('PROOF_CHANNEL_LINK', 'https://t.me/YourProofChannel')
-BINANCE_ADDRESS    = os.getenv('BINANCE_ADDRESS', 'YOUR_USDT_TRC20_ADDRESS')
+BINANCE_ADDRESS    = os.getenv('BINANCE_ADDRESS', 'YOUR_TRC20_ADDRESS')
+UPI_ID             = os.getenv('UPI_ID', 'yourname@upi')
+WA_EARN_LINK       = os.getenv('WA_EARN_LINK', 'https://wa.me/yourlink')
+WA_EARN_VIDEO      = os.getenv('WA_EARN_VIDEO', 'https://youtu.be/yourvideo')
+WA_EARN_NAME       = os.getenv('WA_EARN_NAME', 'OtpKing Earning')
 
-# ── 409 FIX: Delete webhook + drop pending updates before polling ─────────────
-def clear_webhook_and_updates():
-    """Call this ONCE at startup to kill any old session"""
+# 4 Channels
+CH = [
+    (os.getenv('CHANNEL1_ID','@Ch1'), os.getenv('CHANNEL1_LINK','https://t.me/Ch1'), "Channel 1"),
+    (os.getenv('CHANNEL2_ID','@Ch2'), os.getenv('CHANNEL2_LINK','https://t.me/Ch2'), "Channel 2"),
+    (os.getenv('CHANNEL3_ID','@Ch3'), os.getenv('CHANNEL3_LINK','https://t.me/Ch3'), "Channel 3"),
+    (os.getenv('CHANNEL4_ID','@Ch4'), os.getenv('CHANNEL4_LINK','https://t.me/Ch4'), "Channel 4"),
+]
+
+USDT_RATE = 85.0
+MARGIN    = 1.40      # 40% profit on both APIs
+LOW_STOCK = 5
+USDT_LIST = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,18,20,25,30,35,40,45,50]
+UPI_LIST  = [100,200,300,500,1000,2000,3000,5000]
+BAD_WORDS = [
+    "madarchod","mc","bc","bhenchod","gandu","chutiya","randi","harami",
+    "bhosdike","loda","lauda","chut","bsdk","fuck","bitch","asshole",
+    "bastard","shit","dick","cunt","whore","sala","maderchod","behenchod"
+]
+
+# ── 5sim API mappings ─────────────────────────────────────────────────────────
+SIM5_H = {'Authorization': f'Bearer {SIM_API_KEY}', 'Accept': 'application/json'}
+
+# ── SMS-Activate country codes mapping ────────────────────────────────────────
+# sms-activate uses numeric country IDs
+SMSACT_COUNTRIES = {
+    "russia":      "0",
+    "india":       "22",
+    "usa":         "187",
+    "england":     "16",
+    "ukraine":     "1",
+    "brazil":      "73",
+    "indonesia":   "6",
+    "kenya":       "68",
+    "nigeria":     "39",
+    "pakistan":    "92",
+    "cambodia":    "36",
+    "myanmar":     "26",
+    "vietnam":     "10",
+    "philippines": "63",
+    "bangladesh":  "50",
+    "kazakhstan":  "88",
+}
+
+# ── SMS-Activate service codes ─────────────────────────────────────────────────
+SMSACT_SERVICES = {
+    "whatsapp":  "wa",
+    "telegram":  "tg",
+    "instagram": "ig",
+    "google":    "go",
+    "facebook":  "fb",
+    "tiktok":    "tt",
+    "twitter":   "tw",
+    "snapchat":  "sc",
+    "amazon":    "am",
+    "linkedin":  "li",
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  FIX 409
+# ══════════════════════════════════════════════════════════════════════════════
+def clear_session():
     try:
-        # Step 1: delete webhook
-        r1 = requests.get(
+        requests.get(
             f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true",
             timeout=10)
-        logger.info(f"deleteWebhook: {r1.json()}")
         time.sleep(2)
-        # Step 2: getUpdates with offset=-1 to clear queue
-        r2 = requests.get(
+        requests.get(
             f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset=-1&timeout=1",
             timeout=10)
-        logger.info(f"clearUpdates: ok")
         time.sleep(1)
+        logger.info("✅ Session cleared")
     except Exception as e:
-        logger.error(f"Webhook clear failed: {e}")
+        logger.error(f"Session clear: {e}")
 
-# Run fix immediately
-clear_webhook_and_updates()
+clear_session()
 
-# ── Bot init (threaded=False avoids double-thread conflict) ────────────────────
-bot   = telebot.TeleBot(BOT_TOKEN, parse_mode="Markdown", threaded=False)
-mongo = MongoClient(MONGO_URI)
-db    = mongo['anokha_otp_db']
+bot    = telebot.TeleBot(BOT_TOKEN, parse_mode="Markdown", threaded=False)
+client = MongoClient(MONGO_URI)
+db     = client['otp_king_pro']
 users_col    = db['users']
 orders_col   = db['orders']
 deposits_col = db['deposits']
 
-PROFIT_PCT      = 0.60
-LOW_STOCK_LIMIT = 5
-USD_TO_INR      = 85
-SIM_HEADERS     = {'Authorization': f'Bearer {SIM_API_KEY}', 'Accept': 'application/json'}
-USDT_AMOUNTS    = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,18,20,25,30,35,40,45,50]
-
-BAD_WORDS = [
-    "madarchod","mc","bc","bhenchod","gandu","chutiya","randi","harami",
-    "bhosdike","loda","lauda","chut","bsdk","fuck","bitch","asshole",
-    "bastard","shit","dick","cunt","whore","sala","maderchod"
-]
-def has_bad(text): return any(w in (text or "").lower() for w in BAD_WORDS)
-
-# ── Services ──────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  SERVICES
+# ══════════════════════════════════════════════════════════════════════════════
 SERVICES = {
     "📱 WhatsApp": {
         "wa_russia":      {"cc":"russia",      "api":"whatsapp","flag":"🇷🇺","country":"Russia"},
@@ -164,121 +222,307 @@ SERVICES = {
 }
 ALL_BTNS = set(SERVICES.keys())
 
-# ── Price Cache ───────────────────────────────────────────────────────────────
-_pcache = {}
-def live_ps(cc, api):
-    k = f"{cc}|{api}"
-    c = _pcache.get(k)
-    if c and time.time()-c[2] < 1800: return c[0], c[1]
+# ══════════════════════════════════════════════════════════════════════════════
+#  DUAL PRICE ENGINE
+#  Priority: 5sim first → SMS-Activate fallback
+#  Both: live price + 40% margin
+# ══════════════════════════════════════════════════════════════════════════════
+_pc = {}   # price cache
+
+def _5sim_price_stock(cc, api):
+    """Get price & stock from 5sim.net"""
     try:
-        r  = requests.get(f"https://5sim.net/v1/guest/prices?country={cc}&product={api}", timeout=8).json()
-        pd = r.get(cc,{}).get(api,{})
-        if not pd: return None,0
-        best=None; tot=0
-        for op,info in pd.items():
-            cnt=info.get('count',0); tot+=cnt
-            if cnt>0:
-                cost=info.get('cost',0)
-                if best is None or cost<best: best=cost
-        if best:
-            inr=round(best*USD_TO_INR,2); _pcache[k]=(inr,tot,time.time()); return inr,tot
-    except Exception as e: logger.warning(f"price {cc}/{api}: {e}")
-    return None,0
+        r  = requests.get(
+            f"https://5sim.net/v1/guest/prices?country={cc}&product={api}",
+            timeout=8).json()
+        pd = r.get(cc, {}).get(api, {})
+        if not pd: return None, 0
+        best = None; tot = 0
+        for _, info in pd.items():
+            cnt = info.get('count', 0); tot += cnt
+            if cnt > 0:
+                cost = info.get('cost', 0)
+                if best is None or cost < best: best = cost
+        if best and tot > 0:
+            # 5sim price in USD → INR → +40%
+            sell = math.ceil(best * USDT_RATE * MARGIN)
+            return sell, tot
+    except Exception as e:
+        logger.warning(f"5sim price {cc}/{api}: {e}")
+    return None, 0
 
-def sellp(buy): return int(math.ceil(buy*(1+PROFIT_PCT)/5)*5)
+def _smsact_price_stock(cc, api):
+    """Get price & stock from sms-activate.org"""
+    try:
+        country_id  = SMSACT_COUNTRIES.get(cc)
+        service_id  = SMSACT_SERVICES.get(api)
+        if not country_id or not service_id:
+            return None, 0
+        r = requests.get(
+            f"https://api.sms-activate.org/stubs/handler_api.php"
+            f"?api_key={SMS_ACT_KEY}&action=getPrices"
+            f"&service={service_id}&country={country_id}",
+            timeout=8).json()
+        # Response: {country_id: {service_id: {cost: X, count: Y}}}
+        data = r.get(country_id, {}).get(service_id, {})
+        if not data: return None, 0
+        cost  = float(data.get('cost', 0))   # in RUB
+        count = int(data.get('count', 0))
+        if cost > 0 and count > 0:
+            # RUB → INR (1 RUB ≈ 1.0 INR approx) → +40%
+            sell = math.ceil(cost * 1.0 * MARGIN)
+            return sell, count
+    except Exception as e:
+        logger.warning(f"SMSAct price {cc}/{api}: {e}")
+    return None, 0
+
+def get_best_price_stock(cc, api):
+    """
+    Returns (sell_price, stock, source)
+    source = '5sim' or 'smsact'
+    Logic: Use cheaper price if both available,
+           fallback if one is out of stock
+    """
+    k       = f"{cc}|{api}"
+    cached  = _pc.get(k)
+    if cached and time.time() - cached[3] < 1800:
+        return cached[0], cached[1], cached[2]
+
+    p5, s5   = _5sim_price_stock(cc, api)
+    psa, ssa = _smsact_price_stock(cc, api)
+
+    result = None
+    if p5 and s5 > 0 and psa and ssa > 0:
+        # Both available → use cheaper
+        if p5 <= psa:
+            result = (p5, s5, '5sim')
+        else:
+            result = (psa, ssa, 'smsact')
+    elif p5 and s5 > 0:
+        result = (p5, s5, '5sim')
+    elif psa and ssa > 0:
+        result = (psa, ssa, 'smsact')
+
+    if result:
+        _pc[k] = (*result, time.time())
+        return result
+    return None, 0, None
+
 def find_svc(key):
-    for cat,items in SERVICES.items():
-        if key in items: return items[key],cat
-    return None,None
+    for cat, items in SERVICES.items():
+        if key in items: return items[key], cat
+    return None, None
 
-# ── DB ─────────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  BUY NUMBER — Dual API with auto fallback
+# ══════════════════════════════════════════════════════════════════════════════
+def buy_from_5sim(cc, api):
+    """Buy number from 5sim. Returns (order_id, number) or (None, None)"""
+    try:
+        url = f"https://5sim.net/v1/user/buy/activation/{cc}/any/{api}"
+        r   = requests.get(url, headers=SIM5_H, timeout=15).json()
+        if 'phone' in r:
+            return r['id'], r['phone']
+    except Exception as e:
+        logger.error(f"5sim buy {cc}/{api}: {e}")
+    return None, None
+
+def buy_from_smsact(cc, api):
+    """Buy number from sms-activate. Returns (order_id, number) or (None, None)"""
+    try:
+        country_id = SMSACT_COUNTRIES.get(cc)
+        service_id = SMSACT_SERVICES.get(api)
+        if not country_id or not service_id:
+            return None, None
+        r = requests.get(
+            f"https://api.sms-activate.org/stubs/handler_api.php"
+            f"?api_key={SMS_ACT_KEY}&action=getNumber"
+            f"&service={service_id}&country={country_id}",
+            timeout=15).text
+        # Response: "ACCESS_NUMBER:ID:PHONE"
+        if r.startswith("ACCESS_NUMBER"):
+            parts = r.split(":")
+            oid   = parts[1]
+            num   = "+" + parts[2]
+            return oid, num
+    except Exception as e:
+        logger.error(f"SMSAct buy {cc}/{api}: {e}")
+    return None, None
+
+def buy_number_smart(cc, api):
+    """
+    Smart buyer: tries both APIs, auto-fallback
+    Returns (order_id, number, source) or (None, None, None)
+    """
+    # Try 5sim first
+    if SIM_API_KEY:
+        oid, num = buy_from_5sim(cc, api)
+        if oid and num:
+            return oid, num, '5sim'
+
+    # Fallback to SMS-Activate
+    if SMS_ACT_KEY:
+        oid, num = buy_from_smsact(cc, api)
+        if oid and num:
+            return oid, num, 'smsact'
+
+    return None, None, None
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  OTP POLLING — Dual API
+# ══════════════════════════════════════════════════════════════════════════════
+def check_otp_5sim(order_id):
+    """Check OTP from 5sim"""
+    try:
+        r = requests.get(
+            f"https://5sim.net/v1/user/check/{order_id}",
+            headers=SIM5_H, timeout=10).json()
+        if r.get('sms'):
+            return r['sms'][0]['code']
+    except Exception as e:
+        logger.error(f"5sim OTP check: {e}")
+    return None
+
+def check_otp_smsact(order_id):
+    """Check OTP from SMS-Activate"""
+    try:
+        r = requests.get(
+            f"https://api.sms-activate.org/stubs/handler_api.php"
+            f"?api_key={SMS_ACT_KEY}&action=getStatus&id={order_id}",
+            timeout=10).text
+        # Response: "STATUS_OK:CODE" or "STATUS_WAIT_CODE"
+        if r.startswith("STATUS_OK:"):
+            return r.split(":")[1]
+    except Exception as e:
+        logger.error(f"SMSAct OTP check: {e}")
+    return None
+
+def cancel_5sim(order_id):
+    try:
+        requests.get(
+            f"https://5sim.net/v1/user/cancel/{order_id}",
+            headers=SIM5_H, timeout=10)
+    except: pass
+
+def cancel_smsact(order_id):
+    try:
+        requests.get(
+            f"https://api.sms-activate.org/stubs/handler_api.php"
+            f"?api_key={SMS_ACT_KEY}&action=setStatus&status=8&id={order_id}",
+            timeout=10)
+    except: pass
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  DB HELPERS
+# ══════════════════════════════════════════════════════════════════════════════
 def get_user(uid, uname=None, fname=None):
-    u = users_col.find_one({"user_id":uid})
+    u = users_col.find_one({"user_id": uid})
     if not u:
-        u = {"user_id":uid,"username":uname or "","full_name":fname or "",
-             "balance":0,"total_spent":0,"orders":0,"referrals":0,
-             "referral_by":None,"banned":False,"is_reseller":False,
-             "total_earned":0,"joined_at":datetime.utcnow()}
+        u = {
+            "user_id": uid, "username": uname or "",
+            "full_name": fname or "", "balance": 0.0,
+            "total_spent": 0.0, "orders": 0,
+            "banned": False, "joined_at": datetime.utcnow()
+        }
         users_col.insert_one(u)
     return u
 
 def is_banned(uid):
-    u=users_col.find_one({"user_id":uid}); return bool(u and u.get("banned"))
+    u = users_col.find_one({"user_id": uid})
+    return bool(u and u.get("banned"))
 
-def log_order(uid,cat,svc,num,oid,bp,sell):
+def log_order(uid, cat, svc, num, oid, sell, source):
     orders_col.insert_one({
-        "user_id":uid,"category":cat,
-        "service":f"{svc['flag']} {svc['country']} {cat}",
-        "api":svc['api'],"cc":svc['cc'],
-        "number":num,"order_id":oid,
-        "buy_price":bp,"amount":sell,"profit":sell-bp,
-        "status":"pending","otp":None,"created_at":datetime.utcnow()})
+        "user_id": uid, "category": cat,
+        "service": f"{svc['flag']} {svc['country']} {cat}",
+        "api": svc['api'], "cc": svc['cc'],
+        "number": num, "order_id": str(oid),
+        "amount": sell, "source": source,
+        "profit": sell * (1 - 1/MARGIN),
+        "status": "pending", "otp": None,
+        "created_at": datetime.utcnow()
+    })
 
-# ── Force Join ────────────────────────────────────────────────────────────────
-def is_member(uid):
+# ══════════════════════════════════════════════════════════════════════════════
+#  FORCE JOIN — 4 Channels + Group
+# ══════════════════════════════════════════════════════════════════════════════
+def is_joined(uid):
+    ok = ['member','administrator','creator']
+    for ch_id, _, _ in CH:
+        try:
+            if bot.get_chat_member(ch_id, uid).status not in ok:
+                return False
+        except: pass
     try:
-        ok=['member','administrator','creator']
-        return (bot.get_chat_member(CHANNEL_ID,uid).status in ok and
-                bot.get_chat_member(GROUP_ID,uid).status in ok)
-    except: return True
+        if bot.get_chat_member(GROUP_ID, uid).status not in ok:
+            return False
+    except: pass
+    return True
 
-def join_mk():
-    m=types.InlineKeyboardMarkup(row_width=1)
-    m.add(types.InlineKeyboardButton("📢 Channel Join करें",url=CHANNEL_LINK),
-          types.InlineKeyboardButton("👥 Group Join करें",url=GROUP_LINK),
-          types.InlineKeyboardButton("✅ Join किया — Verify करें",callback_data="vfy"))
+def join_markup():
+    m = types.InlineKeyboardMarkup(row_width=1)
+    for ch_id, ch_link, ch_name in CH:
+        m.add(types.InlineKeyboardButton(f"📢 {ch_name} Join करें ✅", url=ch_link))
+    m.add(types.InlineKeyboardButton("👥 Group Join करें ✅", url=GROUP_LINK))
+    m.add(types.InlineKeyboardButton("🔄 Join किया — Verify करें", callback_data="check_join"))
     return m
 
-# ── Keyboards ─────────────────────────────────────────────────────────────────
-def mk_main(uid):
-    m=types.ReplyKeyboardMarkup(resize_keyboard=True,row_width=2)
-    m.add("📱 WhatsApp","✈️ Telegram","📸 Instagram","📧 Gmail",
-          "📘 Facebook","🎵 TikTok","🐦 Twitter/X","📷 Snapchat",
-          "🛒 Amazon","💼 LinkedIn",
-          "💰 Wallet","📋 My Orders",
-          "💸 Earn Money","👥 Refer & Earn",
-          "❓ Help","📊 Proof","📞 Support")
-    if uid==OWNER_ID: m.add("🔧 Admin Panel")
+# ══════════════════════════════════════════════════════════════════════════════
+#  KEYBOARDS
+# ══════════════════════════════════════════════════════════════════════════════
+def main_menu(uid):
+    m = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    m.add("📲 Buy Number", "💰 Wallet")
+    m.add("📋 My Orders",  "👥 Refer & Earn")
+    m.add("📊 Proof",      "🆘 Help")
+    m.add("📞 Support")
+    if uid == OWNER_ID: m.add("⚙️ Admin Panel")
     return m
 
-def mk_admin():
-    m=types.ReplyKeyboardMarkup(resize_keyboard=True,row_width=2)
-    m.add("📊 Stats","👥 Total Users",
-          "📋 Pending Deposits","💹 5sim Balance",
-          "📢 Broadcast","🏆 Top Buyers",
-          "📦 Recent Orders","📈 Stock Check",
-          "💾 Export Users","🔙 Back")
+def buy_menu():
+    m = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    for svc in SERVICES: m.add(svc)
+    m.add("🔙 Back")
+    return m
+
+def admin_menu():
+    m = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    m.add("📊 Stats",        "👥 Users")
+    m.add("📋 Pending Dep",  "💹 API Balances")
+    m.add("🔑 API Keys",     "📡 Channels")
+    m.add("📢 Broadcast",    "🏆 Top Buyers")
+    m.add("📦 Orders",       "📈 Stock")
+    m.add("💾 Export",       "🔙 Back")
     return m
 
 # ── Decorators ────────────────────────────────────────────────────────────────
 def ban_check(fn):
     def w(msg):
         if is_banned(msg.from_user.id):
-            bot.send_message(msg.chat.id,"🚫 *आप बैन हैं!*\nHelp: "+SUPPORT_BOT); return
+            bot.send_message(msg.chat.id, "🚫 *Aap ban hain!*\n" + SUPPORT_BOT); return
         fn(msg)
     return w
 
 def join_check(fn):
     def w(msg):
-        uid=msg.from_user.id
-        if uid==OWNER_ID: fn(msg); return
-        if not is_member(uid):
+        uid = msg.from_user.id
+        if uid == OWNER_ID: fn(msg); return
+        if not is_joined(uid):
             bot.send_message(msg.chat.id,
-                "⚠️ *Bot use करने के लिए Join करें:*\n\n"
-                "1️⃣ Channel join करें\n2️⃣ Group join करें\n3️⃣ Verify दबाएं ✅",
-                reply_markup=join_mk()); return
+                "⚠️ *Pehle sab join karein:*\n4 Channels + 1 Group\nVerify dabayein ✅",
+                reply_markup=join_markup()); return
         fn(msg)
     return w
 
 def gaali_check(fn):
     def w(msg):
-        if msg.from_user.id==OWNER_ID: fn(msg); return
-        if has_bad(msg.text or ""):
-            uid=msg.from_user.id
-            users_col.update_one({"user_id":uid},{"$set":{"banned":True}})
-            bot.send_message(uid,"🚫 *Block हो गए!*\nGaaliyan dene se ban hota hai.\nAppeal: "+SUPPORT_BOT)
+        if msg.from_user.id == OWNER_ID: fn(msg); return
+        if any(w in (msg.text or "").lower() for w in BAD_WORDS):
+            uid = msg.from_user.id
+            users_col.update_one({"user_id": uid}, {"$set": {"banned": True}})
+            bot.send_message(uid, f"🚫 *Block Ho Gaye!*\nGaaliyan = permanent ban.\nAppeal: {SUPPORT_BOT}")
             try: bot.send_message(OWNER_ID,
-                f"⚠️ *Auto-Ban (Gaali)*\n👤 {msg.from_user.first_name} @{msg.from_user.username or 'N/A'}\n🆔 `{uid}`\n💬 `{msg.text}`")
+                f"⚠️ *Auto-Ban*\n👤{msg.from_user.first_name}\n🆔`{uid}`\n💬`{msg.text}`")
             except: pass
             return
         fn(msg)
@@ -289,145 +533,357 @@ def gaali_check(fn):
 # ══════════════════════════════════════════════════════════════════════════════
 @bot.message_handler(commands=['start'])
 def cmd_start(msg):
-    uid=msg.from_user.id; args=msg.text.split()
-    u=get_user(uid,msg.from_user.username,msg.from_user.first_name)
-    if len(args)>1 and not u.get("referral_by"):
-        ref=args[1]
-        if ref.isdigit() and int(ref)!=uid:
-            rid=int(ref)
-            users_col.update_one({"user_id":uid},{"$set":{"referral_by":rid}})
-            users_col.update_one({"user_id":rid},{"$inc":{"balance":10,"referrals":1}})
-            try: bot.send_message(rid,"🎉 Referral! *+₹10* wallet mein! 💰")
-            except: pass
-    if uid!=OWNER_ID and not is_member(uid):
-        bot.send_message(uid,"👋 *Anokha OTP Store* mein swagat!\n\n🔒 Pehle Join karein:",
-            reply_markup=join_mk()); return
-    _greet(uid,msg.from_user.first_name or "Dost")
+    uid = msg.from_user.id
+    get_user(uid, msg.from_user.username, msg.from_user.first_name)
+    if uid != OWNER_ID and not is_joined(uid):
+        bot.send_message(uid,
+            "⚠️ *OtpKing Bot*\n\n"
+            "4 Channels + 1 Group join karein 👇",
+            reply_markup=join_markup())
+        return
+    _greet(uid, msg.from_user.first_name or "Dost")
 
-def _greet(uid,name):
+def _greet(uid, name):
     bot.send_message(uid,
-        f"🔥 *OtpKing Store*\nNamaste *{name}* ji! 🙏\n\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"👑 *OtpKing Bot*\nWelcome *{name}* ji! 🙏\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
         "✅ 10 Services | 50+ Countries\n"
-        "⚡ Instant OTP Delivery\n"
-        "🔄 Auto Refund if OTP fails\n"
-        "💰 USDT Deposit (Binance)\n"
-        "📊 Live Stock & Prices\n"
-        "💸 Earn by Reselling\n"
-        "👥 Refer karo, ₹10 pao\n"
-        "━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "👇 Service chunein:",reply_markup=mk_main(uid))
+        "⚡ Dual API: 5sim + SMS-Activate\n"
+        "🔄 Auto Fallback if stock empty\n"
+        "💎 USDT + 🇮🇳 UPI Deposit\n"
+        "💱 1 USDT = ₹85 | 40% Margin\n"
+        "📊 Live Prices from Both APIs\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "👇 Service chunein:",
+        reply_markup=main_menu(uid))
 
-@bot.callback_query_handler(func=lambda c:c.data=="vfy")
-def cb_vfy(call):
-    if is_member(call.from_user.id):
-        bot.answer_callback_query(call.id,"✅ Verified! Welcome!")
-        _greet(call.from_user.id,call.from_user.first_name or "Dost")
+@bot.callback_query_handler(func=lambda c: c.data == "check_join")
+def cb_check_join(call):
+    if is_joined(call.from_user.id):
+        bot.answer_callback_query(call.id, "✅ Verified! Welcome!")
+        _greet(call.from_user.id, call.from_user.first_name or "Dost")
     else:
-        bot.answer_callback_query(call.id,"❌ Pehle dono join karein!",show_alert=True)
+        bot.answer_callback_query(call.id,
+            "❌ Sabhi join nahi kiye!\n4 Channels + Group karein.", show_alert=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  BUY NUMBER FLOW
+# ══════════════════════════════════════════════════════════════════════════════
+@bot.message_handler(func=lambda m: m.text == "📲 Buy Number")
+@ban_check
+@join_check
+def buy_number(msg):
+    bot.send_message(msg.chat.id,
+        "📲 *Service chunein:*\n\n"
+        "⚡ Dual API: 5sim + SMS-Activate\n"
+        "_Cheapest live price + 40% margin_",
+        reply_markup=buy_menu())
+
+@bot.message_handler(func=lambda m: m.text == "🔙 Back")
+def go_back(msg):
+    bot.send_message(msg.chat.id, "🏠", reply_markup=main_menu(msg.from_user.id))
+
+@bot.message_handler(func=lambda m: m.text in ALL_BTNS)
+@ban_check
+@join_check
+def show_countries(msg):
+    cat   = msg.text
+    items = SERVICES.get(cat, {})
+    lm    = bot.send_message(msg.chat.id,
+        f"⏳ *{cat}*\nDual API se live prices load ho rahi hain...")
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    for key, info in items.items():
+        sell, cnt, src = get_best_price_stock(info['cc'], info['api'])
+        if sell and cnt > 0:
+            si  = "🔴" if cnt<=5 else ("🟡" if cnt<=20 else "🟢")
+            src_icon = "5️⃣" if src=='5sim' else "📱"
+            mk.add(types.InlineKeyboardButton(
+                f"{info['flag']} {info['country']}  ·  ₹{sell}  {si}{cnt} {src_icon}",
+                callback_data=f"buy_{key}"))
+        else:
+            mk.add(types.InlineKeyboardButton(
+                f"{info['flag']} {info['country']}  ·  ❌ Out of Stock",
+                callback_data="oos"))
+    mk.add(types.InlineKeyboardButton("🔙 Back", callback_data="go_back_menu"))
+    bot.edit_message_text(
+        f"*{cat}* — Country chunein:\n"
+        f"🟢OK 🟡Low 🔴Critical ❌Out\n"
+        f"5️⃣=5sim 📱=SMS-Activate\n"
+        f"_Best price auto-selected + 40% margin_",
+        lm.chat.id, lm.message_id, reply_markup=mk)
+
+@bot.callback_query_handler(func=lambda c: c.data == "oos")
+def cb_oos(call):
+    bot.answer_callback_query(call.id,
+        "❌ Dono APIs mein stock khatam!\nThodi der baad try karein.", show_alert=True)
+
+@bot.callback_query_handler(func=lambda c: c.data == "go_back_menu")
+def cb_back(call):
+    bot.send_message(call.message.chat.id, "🏠", reply_markup=main_menu(call.from_user.id))
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("buy_"))
+def cb_buy(call):
+    uid = call.from_user.id
+    if is_banned(uid):
+        return bot.answer_callback_query(call.id, "🚫 Ban.", show_alert=True)
+    if not is_joined(uid) and uid != OWNER_ID:
+        return bot.answer_callback_query(call.id, "⚠️ Pehle join karein!", show_alert=True)
+
+    key      = call.data[4:]
+    svc, cat = find_svc(key)
+    if not svc:
+        return bot.answer_callback_query(call.id, "❌ Invalid.", show_alert=True)
+
+    sell, cnt, src = get_best_price_stock(svc['cc'], svc['api'])
+    if not sell or cnt == 0:
+        return bot.answer_callback_query(call.id,
+            "❌ Dono APIs mein stock khatam!", show_alert=True)
+
+    u = get_user(uid)
+    if u['balance'] < sell:
+        short = sell - u['balance']
+        return bot.answer_callback_query(call.id,
+            f"❌ Balance kam hai!\n"
+            f"Chahiye: ₹{sell:.0f}\n"
+            f"Hai: ₹{u['balance']:.0f}\n"
+            f"Aur chahiye: ₹{short:.0f}\n\n"
+            f"Wallet mein deposit karein!",
+            show_alert=True)
+
+    src_name = "5sim.net" if src=='5sim' else "SMS-Activate"
+    bot.answer_callback_query(call.id, f"⏳ {src_name} se number dhundh rahe hain...")
+    sm = bot.send_message(call.message.chat.id,
+        f"🔄 *Processing...*\n"
+        f"{svc['flag']} {svc['country']} {cat}\n"
+        f"💵 ₹{sell:.0f} balance se katega\n"
+        f"_Source: {src_name}_")
+
+    # Smart buy with auto fallback
+    oid, num, used_src = buy_number_smart(svc['cc'], svc['api'])
+
+    if oid and num:
+        nb = u['balance'] - sell
+        users_col.update_one({"user_id": uid},
+            {"$inc": {"balance": -sell, "orders": 1, "total_spent": sell}})
+        log_order(uid, cat, svc, num, oid, sell, used_src)
+        used_name = "5sim.net" if used_src=='5sim' else "SMS-Activate"
+        bot.edit_message_text(
+            f"✅ *Number Mila!*\n\n"
+            f"📞 Number: `{num}`\n"
+            f"{svc['flag']} {svc['country']} {cat}\n"
+            f"💵 ₹{sell:.0f} kata | Remaining: ₹{nb:.0f}\n"
+            f"🔗 Source: {used_name}\n\n"
+            f"⏳ *OTP aa raha hai...* _(max 5 min)_\n"
+            f"_Nahi aaya to Auto Refund_",
+            call.message.chat.id, sm.message_id)
+        Thread(target=_otp_wait,
+            args=(call.message.chat.id, uid, str(oid), sell, num, svc, cat, nb, used_src),
+            daemon=True).start()
+    else:
+        bot.edit_message_text(
+            f"❌ *Number Nahi Mila*\n"
+            f"Dono APIs try kiye, stock nahi mila.\n"
+            f"_Balance safe hai._\nThodi der baad try karein.",
+            call.message.chat.id, sm.message_id)
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  OTP WAIT — Dual API polling
+# ══════════════════════════════════════════════════════════════════════════════
+def _post_proof(uid, num, svc, cat, amt, otp, source):
+    u      = users_col.find_one({"user_id": uid}) or {}
+    name   = u.get('full_name') or f"User{str(uid)[-4:]}"
+    masked = num[:4]+"****"+num[-2:] if len(num)>6 else num
+    src_n  = "5sim.net" if source=='5sim' else "SMS-Activate"
+    text   = (
+        f"✅ *OTP Delivered!*\n\n"
+        f"📞 `{masked}`\n"
+        f"📍 {svc['flag']} {svc['country']} {cat}\n"
+        f"💵 ₹{amt:.0f}\n"
+        f"🔑 OTP: `{otp}`\n"
+        f"🔗 {src_n}\n"
+        f"👤 {name}\n"
+        f"🕐 {datetime.utcnow().strftime('%d %b %Y %H:%M')} UTC\n\n"
+        f"👑 *OtpKing Store*\n{CH[0][1]}"
+    )
+    for dest in [PROOF_CHANNEL_ID, GROUP_ID]:
+        try: bot.send_message(dest, text)
+        except Exception as e: logger.warning(f"Proof to {dest}: {e}")
+
+def _otp_wait(cid, uid, oid, refund, num, svc, cat, rbal, source):
+    for _ in range(30):
+        time.sleep(10)
+        # Check OTP from correct API
+        if source == '5sim':
+            otp = check_otp_5sim(oid)
+        else:
+            otp = check_otp_smsact(oid)
+
+        if otp:
+            orders_col.update_one({"order_id": oid},
+                {"$set": {"status": "done", "otp": otp}})
+            bot.send_message(cid,
+                f"🎉 *OTP Aa Gaya!*\n\n"
+                f"📞 `{num}`\n"
+                f"{svc['flag']} {svc['country']} {cat}\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🔑 *OTP Code:* `{otp}`\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"💰 Balance: ₹{rbal:.0f}\n✅ Done! 🙏")
+            Thread(target=_post_proof,
+                args=(uid, num, svc, cat, refund, otp, source), daemon=True).start()
+            return
+
+    # Timeout → cancel + refund
+    if source == '5sim':
+        cancel_5sim(oid)
+    else:
+        cancel_smsact(oid)
+    orders_col.update_one({"order_id": oid}, {"$set": {"status": "cancelled"}})
+    users_col.update_one({"user_id": uid},
+        {"$inc": {"balance": refund, "total_spent": -refund}})
+    bot.send_message(cid,
+        f"❌ *OTP Timeout*\n📞 `{num}`\n"
+        f"5 min mein OTP nahi aaya.\n\n"
+        f"💰 *₹{refund:.0f} Auto Refund!*")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  WALLET
 # ══════════════════════════════════════════════════════════════════════════════
-@bot.message_handler(func=lambda m:m.text=="💰 Wallet")
+@bot.message_handler(func=lambda m: m.text == "💰 Wallet")
 @ban_check
 @join_check
 def wallet(msg):
-    u=get_user(msg.from_user.id)
-    m=types.InlineKeyboardMarkup(row_width=1)
-    m.add(types.InlineKeyboardButton("💎 USDT Deposit (Binance)",callback_data="d_usdt"),
-          types.InlineKeyboardButton("📊 Transaction History",callback_data="d_hist"))
+    u = get_user(msg.from_user.id)
+    m = types.InlineKeyboardMarkup(row_width=1)
+    m.add(
+        types.InlineKeyboardButton("💎 USDT Deposit (Binance)", callback_data="d_usdt"),
+        types.InlineKeyboardButton("🇮🇳 UPI / QR Deposit",     callback_data="d_upi"),
+        types.InlineKeyboardButton("📊 Transaction History",    callback_data="d_hist"),
+    )
     bot.send_message(msg.chat.id,
-        f"💳 *Aapka Wallet*\n\n"
+        f"💳 *Your Wallet*\n\n"
         f"🆔 `{msg.from_user.id}`\n"
-        f"💵 Balance:     *₹{u['balance']}*\n"
-        f"🛒 Orders:      `{u.get('orders',0)}`\n"
-        f"💸 Total Spent: `₹{u.get('total_spent',0)}`\n"
-        f"💰 Earned:      `₹{u.get('total_earned',0)}`\n"
-        f"👥 Referrals:   `{u.get('referrals',0)}`",reply_markup=m)
+        f"💵 Balance: *₹{u['balance']:.0f}*\n"
+        f"🛒 Orders:  `{u.get('orders',0)}`\n"
+        f"💸 Spent:   `₹{u.get('total_spent',0):.0f}`\n\n"
+        f"💱 1 USDT = ₹{USDT_RATE:.0f}",
+        reply_markup=m)
 
-@bot.callback_query_handler(func=lambda c:c.data=="d_usdt")
+@bot.callback_query_handler(func=lambda c: c.data == "d_usdt")
 def cb_usdt(call):
-    m=types.InlineKeyboardMarkup(row_width=4)
-    m.add(*[types.InlineKeyboardButton(f"${a}",callback_data=f"usdt_{a}") for a in USDT_AMOUNTS])
-    m.add(types.InlineKeyboardButton("🔙 Back",callback_data="d_back"))
-    bot.send_message(call.message.chat.id,"💎 *USDT — Amount chunein:*",reply_markup=m)
+    m = types.InlineKeyboardMarkup(row_width=4)
+    m.add(*[types.InlineKeyboardButton(f"${a}", callback_data=f"usdt_{a}") for a in USDT_LIST])
+    m.add(types.InlineKeyboardButton("🔙 Back", callback_data="d_back"))
+    bot.send_message(call.message.chat.id,
+        f"💎 *USDT Deposit*\n💱 1 USDT = ₹{USDT_RATE:.0f}\n\nAmount chunein 👇",
+        reply_markup=m)
 
-@bot.callback_query_handler(func=lambda c:c.data.startswith("usdt_"))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("usdt_"))
 def cb_usdt_amt(call):
-    amt=call.data.split("_")[1]; inr=int(float(amt)*USD_TO_INR)
-    m=types.InlineKeyboardMarkup()
-    m.add(types.InlineKeyboardButton("💬 Admin se Binance Address Lein",
+    amt = call.data.split("_")[1]; inr = int(float(amt)*USDT_RATE)
+    m   = types.InlineKeyboardMarkup()
+    m.add(types.InlineKeyboardButton("💬 Admin se Contact Karein",
         url=f"https://t.me/{SUPPORT_BOT.replace('@','')}"))
     bot.send_message(call.message.chat.id,
-        f"💎 *${amt} USDT Deposit — Steps:*\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"⚠️ *STEP 1: Admin se Contact Karein PEHLE*\n"
-        f"   👉 {SUPPORT_BOT}\n"
-        f"   Bolein: *'${amt} USDT deposit karna hai'*\n\n"
-        f"📋 *STEP 2: Admin Binance Address Dega*\n"
-        f"   Admin aapko TRC20 address send karega\n\n"
-        f"₿ *STEP 3: Binance se Send Karein*\n"
-        f"   Amount: *${amt} USDT*\n"
-        f"   Network: *TRC20 (TRON) only*\n"
-        f"   ⚠️ Koi aur network use mat karein!\n\n"
-        f"📸 *STEP 4: Screenshot Bhejein*\n"
-        f"   Transaction screenshot is chat mein\n\n"
-        f"✅ *STEP 5: Verify → ≈₹{inr} Wallet Mein!*\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💱 $1 ≈ ₹{USD_TO_INR} | ⏱ 5-30 min\n"
-        f"⚠️ *Bina admin confirm ke send mat karein!*",reply_markup=m)
+        f"💎 *${amt} USDT = ₹{inr}*\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"*1️⃣ Admin se contact karein PEHLE*\n"
+        f"   👉 {SUPPORT_BOT}\n\n"
+        f"*2️⃣ Binance TRC20 address pe bhejein:*\n"
+        f"   `{BINANCE_ADDRESS}`\n"
+        f"   Network: *TRC20 ONLY*\n"
+        f"   Amount: *${amt} USDT*\n\n"
+        f"*3️⃣ Screenshot is chat mein bhejein*\n\n"
+        f"*4️⃣ Admin verify → ₹{inr} wallet mein!*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ 5-30 min | ⚠️ Bina confirm mat bhejein!",
+        reply_markup=m)
 
-@bot.callback_query_handler(func=lambda c:c.data=="d_back")
+@bot.callback_query_handler(func=lambda c: c.data == "d_upi")
+def cb_upi(call):
+    m = types.InlineKeyboardMarkup(row_width=3)
+    m.add(*[types.InlineKeyboardButton(f"₹{a}", callback_data=f"upi_{a}") for a in UPI_LIST])
+    m.add(types.InlineKeyboardButton("🔙 Back", callback_data="d_back"))
+    bot.send_message(call.message.chat.id, "🇮🇳 *UPI / QR Deposit*\n\nAmount chunein 👇", reply_markup=m)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("upi_"))
+def cb_upi_amt(call):
+    amt = call.data.split("_")[1]
+    m   = types.InlineKeyboardMarkup()
+    m.add(types.InlineKeyboardButton("💬 Admin se QR Code Maangein",
+        url=f"https://t.me/{SUPPORT_BOT.replace('@','')}"))
+    bot.send_message(call.message.chat.id,
+        f"🇮🇳 *₹{amt} UPI Deposit*\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"*1️⃣ Admin se QR Code maangein PEHLE*\n"
+        f"   👉 {SUPPORT_BOT}\n\n"
+        f"*2️⃣ QR scan ya UPI se bhejein:*\n"
+        f"   UPI: `{UPI_ID}`\n"
+        f"   Amount: *₹{amt}*\n\n"
+        f"*3️⃣ Screenshot is chat mein bhejein*\n\n"
+        f"*4️⃣ Admin verify → ₹{amt} wallet mein!*\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"⏱ 5-15 min",
+        reply_markup=m)
+
+@bot.callback_query_handler(func=lambda c: c.data == "d_back")
 def cb_dep_back(call):
-    u=get_user(call.from_user.id)
-    m=types.InlineKeyboardMarkup(row_width=1)
-    m.add(types.InlineKeyboardButton("💎 USDT Deposit",callback_data="d_usdt"),
-          types.InlineKeyboardButton("📊 History",callback_data="d_hist"))
-    bot.send_message(call.message.chat.id,f"💳 Balance: *₹{u['balance']}*",reply_markup=m)
+    u = get_user(call.from_user.id)
+    m = types.InlineKeyboardMarkup(row_width=1)
+    m.add(types.InlineKeyboardButton("💎 USDT",   callback_data="d_usdt"),
+          types.InlineKeyboardButton("🇮🇳 UPI/QR", callback_data="d_upi"),
+          types.InlineKeyboardButton("📊 History", callback_data="d_hist"))
+    bot.send_message(call.message.chat.id, f"💳 Balance: *₹{u['balance']:.0f}*", reply_markup=m)
 
-@bot.callback_query_handler(func=lambda c:c.data=="d_hist")
+@bot.callback_query_handler(func=lambda c: c.data == "d_hist")
 def cb_hist(call):
-    orders =list(orders_col.find({"user_id":call.from_user.id}).sort("created_at",-1).limit(8))
-    deps   =list(deposits_col.find({"user_id":call.from_user.id}).sort("created_at",-1).limit(5))
-    t="📊 *Transaction History*\n\n"
+    orders = list(orders_col.find({"user_id":call.from_user.id}).sort("created_at",-1).limit(8))
+    deps   = list(deposits_col.find({"user_id":call.from_user.id}).sort("created_at",-1).limit(5))
+    t = "📊 *Transaction History*\n\n"
     if deps:
-        t+="💰 *Deposits:*\n"
+        t += "💰 *Deposits:*\n"
         for d in deps:
-            ic="✅" if d['status']=="approved" else("❌" if d['status']=="rejected" else "⏳")
-            t+=f"{ic} USDT ${d.get('usdt_amt',0)} ≈ ₹{d['amount']} — {d['created_at'].strftime('%d %b %H:%M')}\n"
-        t+="\n"
+            ic = "✅" if d['status']=="approved" else("❌" if d['status']=="rejected" else "⏳")
+            t += f"{ic} {d.get('method','?')} ₹{d.get('amount',0):.0f} — {d['created_at'].strftime('%d %b %H:%M')}\n"
+        t += "\n"
     if orders:
-        t+="🛒 *Orders:*\n"
+        t += "🛒 *Orders:*\n"
         for o in orders:
-            ic="✅" if o['status']=="done" else("❌" if o['status']=="cancelled" else "⏳")
-            t+=f"{ic} {o['service']} ₹{o['amount']} — {o['created_at'].strftime('%d %b %H:%M')}\n"
-    else: t+="📭 Koi order nahi."
-    bot.send_message(call.message.chat.id,t)
+            ic  = "✅" if o['status']=="done" else("❌" if o['status']=="cancelled" else "⏳")
+            src = "5️⃣" if o.get('source')=='5sim' else "📱"
+            t  += f"{ic}{src} {o['service']} ₹{o['amount']:.0f} — {o['created_at'].strftime('%d %b %H:%M')}\n"
+    else:
+        t += "📭 Koi order nahi."
+    bot.send_message(call.message.chat.id, t)
 
 @bot.message_handler(content_types=['photo'])
 def on_photo(msg):
-    if msg.from_user.id==OWNER_ID: return
+    if msg.from_user.id == OWNER_ID: return
     deposits_col.insert_one({
-        "user_id":msg.from_user.id,"username":msg.from_user.username or "",
-        "full_name":msg.from_user.first_name or "","amount":0,"usdt_amt":0,
-        "status":"pending","method":"USDT","message_id":msg.message_id,
-        "created_at":datetime.utcnow()})
-    bot.forward_message(OWNER_ID,msg.chat.id,msg.message_id)
+        "user_id": msg.from_user.id, "username": msg.from_user.username or "",
+        "full_name": msg.from_user.first_name or "", "amount": 0.0,
+        "status": "pending", "method": "USDT/UPI",
+        "message_id": msg.message_id, "created_at": datetime.utcnow()
+    })
+    bot.forward_message(OWNER_ID, msg.chat.id, msg.message_id)
     bot.send_message(OWNER_ID,
-        f"📩 *Naya Deposit Screenshot!*\n\n"
-        f"👤 {msg.from_user.first_name} @{msg.from_user.username or 'N/A'}\n"
-        f"🆔 `{msg.from_user.id}`\n\n"
-        f"✅ `/add {msg.from_user.id} INR_AMOUNT USDT_AMOUNT`\n"
+        f"📩 *Naya Deposit!*\n👤{msg.from_user.first_name} @{msg.from_user.username or 'N/A'}\n"
+        f"🆔`{msg.from_user.id}`\n\n"
+        f"✅ `/add {msg.from_user.id} AMOUNT [usdt]`\n"
         f"❌ `/reject {msg.from_user.id}`")
-    bot.reply_to(msg,"✅ *Screenshot mila!*\n⏳ Admin 5-30 min mein verify karega.")
+    try:
+        bot.forward_message(PROOF_CHANNEL_ID, msg.chat.id, msg.message_id)
+        bot.send_message(PROOF_CHANNEL_ID,
+            f"💰 *Deposit Request*\n👤{msg.from_user.first_name}\n⏳ Pending...\n👑 OtpKing")
+    except: pass
+    bot.reply_to(msg, "✅ *Screenshot mila!*\n⏳ Admin verify karega.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  OWNER COMMANDS
 # ══════════════════════════════════════════════════════════════════════════════
-def oo(fn):   # owner_only decorator
+def oo(fn):
     def w(msg):
-        if msg.from_user.id!=OWNER_ID: return
+        if msg.from_user.id != OWNER_ID: return
         fn(msg)
     return w
 
@@ -435,204 +891,275 @@ def oo(fn):   # owner_only decorator
 @oo
 def cmd_add(msg):
     try:
-        parts=msg.text.split(); uid=int(parts[1]); inr=int(parts[2])
-        usdt=float(parts[3]) if len(parts)>3 else 0
-        users_col.update_one({"user_id":uid},{"$inc":{"balance":inr}})
+        parts  = msg.text.split()
+        uid    = int(parts[1]); amount = float(parts[2])
+        method = parts[3].upper() if len(parts)>3 else "UPI"
+        users_col.update_one({"user_id":uid}, {"$inc":{"balance":amount}})
         deposits_col.update_one({"user_id":uid,"status":"pending"},
-            {"$set":{"status":"approved","amount":inr,"usdt_amt":usdt}},sort=[("created_at",-1)])
+            {"$set":{"status":"approved","amount":amount,"method":method}},
+            sort=[("created_at",-1)])
         bot.send_message(uid,
-            f"🎉 *Deposit Approved!*\n\n💎 ${usdt} USDT → *₹{inr}* wallet mein!\nAb number khareedein 🛒")
-        bot.reply_to(msg,f"✅ ₹{inr} (${usdt}) → `{uid}`")
-    except: bot.reply_to(msg,"❌ `/add USER_ID INR USDT`\nExample: `/add 123456 850 10`")
+            f"🎉 *Deposit Approved!*\n"
+            f"{'💎 USDT' if method=='USDT' else '🇮🇳 UPI'} → *₹{amount:.0f}* wallet mein!\n"
+            f"Ab number khareedein 🛒")
+        try:
+            bot.send_message(PROOF_CHANNEL_ID,
+                f"✅ *Deposit Approved!*\n{method} → ₹{amount:.0f}\n"
+                f"👤`{uid}`\n🕐{datetime.utcnow().strftime('%d %b %H:%M')} UTC\n👑 OtpKing")
+        except: pass
+        bot.reply_to(msg, f"✅ ₹{amount:.0f} → `{uid}`")
+    except:
+        bot.reply_to(msg,
+            "❌ Format:\n`/add USER_ID AMOUNT [usdt]`\n\n"
+            "Examples:\n`/add 123456 500`\n`/add 123456 850 usdt`")
 
 @bot.message_handler(commands=['reject'])
 @oo
 def cmd_reject(msg):
     try:
-        uid=int(msg.text.split()[1])
+        uid = int(msg.text.split()[1])
         deposits_col.update_one({"user_id":uid,"status":"pending"},
-            {"$set":{"status":"rejected"}},sort=[("created_at",-1)])
-        bot.send_message(uid,f"❌ Deposit reject hua.\nRetry: {SUPPORT_BOT}")
-        bot.reply_to(msg,f"✅ Rejected `{uid}`")
-    except: bot.reply_to(msg,"❌ `/reject USER_ID`")
+            {"$set":{"status":"rejected"}}, sort=[("created_at",-1)])
+        bot.send_message(uid, f"❌ *Deposit Reject.*\nRetry: {SUPPORT_BOT}")
+        bot.reply_to(msg, f"✅ Rejected `{uid}`")
+    except: bot.reply_to(msg, "❌ `/reject USER_ID`")
 
 @bot.message_handler(commands=['deduct'])
 @oo
 def cmd_deduct(msg):
     try:
-        _,uid,amt=msg.text.split()
-        users_col.update_one({"user_id":int(uid)},{"$inc":{"balance":-int(amt)}})
-        bot.reply_to(msg,f"✅ ₹{amt} deducted `{uid}`")
-    except: bot.reply_to(msg,"❌ `/deduct USER_ID AMOUNT`")
+        _, uid, amt = msg.text.split()
+        users_col.update_one({"user_id":int(uid)}, {"$inc":{"balance":-float(amt)}})
+        bot.reply_to(msg, f"✅ ₹{amt} deducted `{uid}`")
+    except: bot.reply_to(msg, "❌ `/deduct USER_ID AMOUNT`")
 
 @bot.message_handler(commands=['ban'])
 @oo
 def cmd_ban(msg):
     try:
-        uid=int(msg.text.split()[1])
-        users_col.update_one({"user_id":uid},{"$set":{"banned":True}})
-        try: bot.send_message(uid,f"🚫 Ban kiya gaya.\nAppeal: {SUPPORT_BOT}")
+        uid = int(msg.text.split()[1])
+        users_col.update_one({"user_id":uid}, {"$set":{"banned":True}})
+        try: bot.send_message(uid, f"🚫 Ban. Appeal: {SUPPORT_BOT}")
         except: pass
-        bot.reply_to(msg,f"🚫 `{uid}` banned.")
-    except: bot.reply_to(msg,"❌ `/ban USER_ID`")
+        bot.reply_to(msg, f"🚫 `{uid}` banned.")
+    except: bot.reply_to(msg, "❌ `/ban USER_ID`")
 
 @bot.message_handler(commands=['unban'])
 @oo
 def cmd_unban(msg):
     try:
-        uid=int(msg.text.split()[1])
-        users_col.update_one({"user_id":uid},{"$set":{"banned":False}})
-        try: bot.send_message(uid,"✅ Ban hata diya gaya.")
+        uid = int(msg.text.split()[1])
+        users_col.update_one({"user_id":uid}, {"$set":{"banned":False}})
+        try: bot.send_message(uid, "✅ Ban hata diya.")
         except: pass
-        bot.reply_to(msg,f"✅ `{uid}` unbanned.")
-    except: bot.reply_to(msg,"❌ `/unban USER_ID`")
+        bot.reply_to(msg, f"✅ `{uid}` unbanned.")
+    except: bot.reply_to(msg, "❌ `/unban USER_ID`")
 
 @bot.message_handler(commands=['broadcast'])
 @oo
 def cmd_bc(msg):
-    t=msg.text.replace('/broadcast','',1).strip()
-    if not t: bot.reply_to(msg,"❌ `/broadcast MESSAGE`"); return
-    _bc(msg.chat.id,t)
+    t = msg.text.replace('/broadcast','',1).strip()
+    if not t: bot.reply_to(msg, "❌ `/broadcast MSG`"); return
+    _do_broadcast(msg.chat.id, t)
 
 @bot.message_handler(commands=['stats'])
 @oo
-def cmd_stats(msg): _stats(msg.chat.id)
+def cmd_stats(msg): _send_stats(msg.chat.id)
 
 @bot.message_handler(commands=['userinfo'])
 @oo
 def cmd_uinfo(msg):
-    try: _uinfo(msg.chat.id,int(msg.text.split()[1]))
-    except: bot.reply_to(msg,"❌ `/userinfo USER_ID`")
-
-@bot.message_handler(commands=['makereseller'])
-@oo
-def cmd_reseller(msg):
-    try:
-        uid=int(msg.text.split()[1])
-        users_col.update_one({"user_id":uid},{"$set":{"is_reseller":True}})
-        bot.send_message(uid,"🎉 *Reseller ban gaye!*\nHar order par 10% extra earning!")
-        bot.reply_to(msg,f"✅ `{uid}` is reseller now.")
-    except: bot.reply_to(msg,"❌ `/makereseller USER_ID`")
+    try: _send_uinfo(msg.chat.id, int(msg.text.split()[1]))
+    except: bot.reply_to(msg, "❌ `/userinfo USER_ID`")
 
 # ── Admin Panel ────────────────────────────────────────────────────────────────
-@bot.message_handler(func=lambda m:m.text=="🔧 Admin Panel")
+@bot.message_handler(func=lambda m: m.text=="⚙️ Admin Panel")
 def admin_panel(msg):
-    if msg.from_user.id!=OWNER_ID: return
-    bot.send_message(msg.chat.id,"🔧 *Admin Panel*",reply_markup=mk_admin())
+    if msg.from_user.id != OWNER_ID: return
+    bot.send_message(msg.chat.id, "⚙️ *Admin Panel*", reply_markup=admin_menu())
 
-@bot.message_handler(func=lambda m:m.text=="📊 Stats" and m.from_user.id==OWNER_ID)
-def ab_stats(msg): _stats(msg.chat.id)
+@bot.message_handler(func=lambda m: m.text=="📊 Stats" and m.from_user.id==OWNER_ID)
+def ab_stats(msg): _send_stats(msg.chat.id)
 
-@bot.message_handler(func=lambda m:m.text=="👥 Total Users" and m.from_user.id==OWNER_ID)
+@bot.message_handler(func=lambda m: m.text=="👥 Users" and m.from_user.id==OWNER_ID)
 def ab_users(msg):
-    total =users_col.count_documents({})
-    active=users_col.count_documents({"orders":{"$gt":0}})
-    banned=users_col.count_documents({"banned":True})
-    today =users_col.count_documents({"joined_at":{"$gte":datetime.utcnow().replace(hour=0,minute=0,second=0,microsecond=0)}})
-    resell=users_col.count_documents({"is_reseller":True})
+    tu=users_col.count_documents({}); ac=users_col.count_documents({"orders":{"$gt":0}})
+    bu=users_col.count_documents({"banned":True})
+    td=users_col.count_documents({"joined_at":{"$gte":datetime.utcnow().replace(hour=0,minute=0,second=0,microsecond=0)}})
     bot.send_message(msg.chat.id,
-        f"👥 *User Analytics*\n\n"
-        f"📊 Total:       `{total}`\n"
-        f"✅ Active:      `{active}`\n"
-        f"🚫 Banned:      `{banned}`\n"
-        f"🌟 Resellers:   `{resell}`\n"
-        f"🆕 Today:       `{today}`")
+        f"👥 *Users*\n📊 Total:`{tu}` ✅Active:`{ac}` 🚫Banned:`{bu}` 🆕Today:`{td}`")
 
-@bot.message_handler(func=lambda m:m.text=="📋 Pending Deposits" and m.from_user.id==OWNER_ID)
+@bot.message_handler(func=lambda m: m.text=="📋 Pending Dep" and m.from_user.id==OWNER_ID)
 def ab_pend(msg):
-    deps=list(deposits_col.find({"status":"pending"}).sort("created_at",-1).limit(10))
-    if not deps: bot.send_message(msg.chat.id,"✅ Koi pending nahi."); return
-    t="📋 *Pending Deposits:*\n\n"
+    deps = list(deposits_col.find({"status":"pending"}).sort("created_at",-1).limit(10))
+    if not deps: bot.send_message(msg.chat.id, "✅ Koi pending nahi."); return
+    t = "📋 *Pending:*\n\n"
     for d in deps:
-        t+=(f"👤 {d.get('full_name','N/A')} @{d.get('username','N/A')}\n"
-            f"🆔 `{d['user_id']}` — {d['created_at'].strftime('%d %b %H:%M')}\n"
-            f"➡️ `/add {d['user_id']} INR USDT`\n\n")
-    bot.send_message(msg.chat.id,t)
+        t += f"👤{d.get('full_name','N/A')} @{d.get('username','N/A')}\n🆔`{d['user_id']}` {d['created_at'].strftime('%d %b %H:%M')}\n✅`/add {d['user_id']} AMOUNT [usdt]`\n\n"
+    bot.send_message(msg.chat.id, t)
 
-@bot.message_handler(func=lambda m:m.text=="💹 5sim Balance" and m.from_user.id==OWNER_ID)
-def ab_sim(msg):
+# ── Both API Balances ──────────────────────────────────────────────────────────
+@bot.message_handler(func=lambda m: m.text=="💹 API Balances" and m.from_user.id==OWNER_ID)
+def ab_api_bal(msg):
+    results = []
+    # 5sim balance
     try:
-        r=requests.get("https://5sim.net/v1/user/profile",headers=SIM_HEADERS,timeout=10).json()
-        bot.send_message(msg.chat.id,
-            f"💹 *5sim Account*\n💵 Balance: `${r.get('balance',0):.4f}`\n📧 `{r.get('email','N/A')}`")
-    except: bot.send_message(msg.chat.id,"❌ 5sim error")
+        r = requests.get("https://5sim.net/v1/user/profile",
+            headers={'Authorization':f'Bearer {SIM_API_KEY}','Accept':'application/json'},
+            timeout=10)
+        if r.status_code == 200:
+            d = r.json()
+            results.append(f"✅ *5sim.net*\n   💵 Balance: `${d.get('balance',0):.4f}`\n   📧 `{d.get('email','N/A')}`")
+        else:
+            results.append(f"❌ *5sim.net*\n   HTTP {r.status_code} — Check SIM_API_KEY")
+    except Exception as e:
+        results.append(f"❌ *5sim.net*\n   Error: {str(e)[:50]}")
 
-@bot.message_handler(func=lambda m:m.text=="📢 Broadcast" and m.from_user.id==OWNER_ID)
-def ab_bc(msg): bot.send_message(msg.chat.id,"📢 Format:\n`/broadcast Your message`")
+    # SMS-Activate balance
+    try:
+        r = requests.get(
+            f"https://api.sms-activate.org/stubs/handler_api.php"
+            f"?api_key={SMS_ACT_KEY}&action=getBalance",
+            timeout=10).text
+        if r.startswith("ACCESS_BALANCE"):
+            bal = r.split(":")[1]
+            results.append(f"✅ *SMS-Activate*\n   💵 Balance: `{bal} RUB`")
+        else:
+            results.append(f"❌ *SMS-Activate*\n   Response: {r[:50]}")
+    except Exception as e:
+        results.append(f"❌ *SMS-Activate*\n   Error: {str(e)[:50]}")
 
-@bot.message_handler(func=lambda m:m.text=="🏆 Top Buyers" and m.from_user.id==OWNER_ID)
+    bot.send_message(msg.chat.id,
+        "💹 *API Balances*\n\n" + "\n\n".join(results) +
+        "\n\n_5sim low? https://5sim.net_\n_SMSAct low? https://sms-activate.org_")
+
+# ── API Keys Check ─────────────────────────────────────────────────────────────
+@bot.message_handler(func=lambda m: m.text=="🔑 API Keys" and m.from_user.id==OWNER_ID)
+def ab_apikeys(msg):
+    results = []
+    # BOT_TOKEN
+    try:
+        r = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getMe",timeout=8).json()
+        results.append(f"✅ BOT_TOKEN → @{r['result']['username']}" if r.get('ok') else "❌ BOT_TOKEN → Invalid!")
+    except: results.append("❌ BOT_TOKEN → Error")
+    # 5sim
+    try:
+        r = requests.get("https://5sim.net/v1/user/profile",
+            headers={'Authorization':f'Bearer {SIM_API_KEY}','Accept':'application/json'},timeout=8)
+        bal = r.json().get('balance',0) if r.status_code==200 else None
+        results.append(f"✅ SIM_API_KEY → Active (${bal:.2f})" if bal is not None else f"❌ SIM_API_KEY → HTTP {r.status_code}")
+    except: results.append("❌ SIM_API_KEY → Error")
+    # SMS-Activate
+    try:
+        r = requests.get(f"https://api.sms-activate.org/stubs/handler_api.php?api_key={SMS_ACT_KEY}&action=getBalance",timeout=8).text
+        results.append(f"✅ SMS_ACTIVATE_KEY → Active ({r.split(':')[1]} RUB)" if r.startswith("ACCESS_BALANCE") else f"❌ SMS_ACTIVATE_KEY → {r[:30]}")
+    except: results.append("❌ SMS_ACTIVATE_KEY → Error")
+    # MongoDB
+    try:
+        client.admin.command('ping')
+        results.append(f"✅ MONGO_URI → Connected ({users_col.count_documents({})} users)")
+    except Exception as e: results.append(f"❌ MONGO_URI → {str(e)[:40]}")
+    # Binance
+    results.append(f"✅ BINANCE_ADDRESS → {BINANCE_ADDRESS[:12]}..." if len(BINANCE_ADDRESS)>15 and BINANCE_ADDRESS!="YOUR_TRC20_ADDRESS" else "❌ BINANCE_ADDRESS → Not set!")
+    results.append(f"✅ OWNER_ID → `{OWNER_ID}`")
+    bot.send_message(msg.chat.id, "🔑 *API Keys*\n\n" + "\n".join(results) + "\n\n_✅=OK | ❌=Fix_")
+
+# ── Channels Check ─────────────────────────────────────────────────────────────
+@bot.message_handler(func=lambda m: m.text=="📡 Channels" and m.from_user.id==OWNER_ID)
+def ab_channels(msg):
+    bot_id = bot.get_me().id; results = []
+    for i,(ch_id,ch_link,ch_name) in enumerate(CH,1):
+        try:
+            c=bot.get_chat(ch_id); bm=bot.get_chat_member(ch_id,bot_id)
+            adm=bm.status in ['administrator','creator']
+            results.append(f"{'✅' if adm else '⚠️'} {ch_name}:`{ch_id}`\n   📛{c.title}\n   🤖Bot Admin:{'Yes✅' if adm else 'NO❌'}")
+        except Exception as e: results.append(f"❌ {ch_name}: {str(e)[:40]}")
+    for label,cid in [("Group",GROUP_ID),("Proof",PROOF_CHANNEL_ID)]:
+        try:
+            c=bot.get_chat(cid); bm=bot.get_chat_member(cid,bot_id)
+            adm=bm.status in ['administrator','creator']
+            results.append(f"{'✅' if adm else '⚠️'} {label}:`{cid}`\n   📛{c.title}\n   🤖Bot Admin:{'Yes✅' if adm else 'NO❌'}")
+        except Exception as e: results.append(f"❌ {label}: {str(e)[:40]}")
+    bot.send_message(msg.chat.id, "📡 *Channels*\n\n" + "\n\n".join(results))
+
+@bot.message_handler(func=lambda m: m.text=="📢 Broadcast" and m.from_user.id==OWNER_ID)
+def ab_bc(msg): bot.send_message(msg.chat.id, "📢 `/broadcast Your message`")
+
+@bot.message_handler(func=lambda m: m.text=="🏆 Top Buyers" and m.from_user.id==OWNER_ID)
 def ab_top(msg):
-    r=list(orders_col.aggregate([
-        {"$match":{"status":"done"}},
+    r=list(orders_col.aggregate([{"$match":{"status":"done"}},
         {"$group":{"_id":"$user_id","total":{"$sum":"$amount"},"cnt":{"$sum":1}}},
         {"$sort":{"total":-1}},{"$limit":10}]))
     if not r: bot.send_message(msg.chat.id,"📭"); return
-    t="🏆 *Top 10 Buyers*\n\n"
+    t="🏆 *Top 10*\n\n"
     for i,x in enumerate(r,1):
         u=users_col.find_one({"user_id":x['_id']}) or {}
-        n=u.get('full_name') or u.get('username') or str(x['_id'])
-        t+=f"{i}. {n} — ₹{x['total']} ({x['cnt']})\n"
-    bot.send_message(msg.chat.id,t)
+        t+=f"{i}. {u.get('full_name','N/A')} — ₹{x['total']:.0f} ({x['cnt']})\n"
+    bot.send_message(msg.chat.id, t)
 
-@bot.message_handler(func=lambda m:m.text=="📦 Recent Orders" and m.from_user.id==OWNER_ID)
-def ab_rec(msg):
+@bot.message_handler(func=lambda m: m.text=="📦 Orders" and m.from_user.id==OWNER_ID)
+def ab_orders(msg):
     orders=list(orders_col.find().sort("created_at",-1).limit(10))
     if not orders: bot.send_message(msg.chat.id,"📭"); return
-    t="📦 *Recent Orders*\n\n"
+    t="📦 *Recent*\n\n"
     for o in orders:
         ic="✅" if o['status']=="done" else("❌" if o['status']=="cancelled" else "⏳")
-        t+=f"{ic} `{o['number']}` {o['service']}\n👤`{o['user_id']}` ₹{o['amount']} {o['created_at'].strftime('%d %b %H:%M')}\n\n"
-    bot.send_message(msg.chat.id,t)
+        src="5️⃣" if o.get('source')=='5sim' else "📱"
+        t+=f"{ic}{src} `{o['number']}` {o['service']}\n👤`{o['user_id']}` ₹{o['amount']:.0f} {o['created_at'].strftime('%d %b %H:%M')}\n\n"
+    bot.send_message(msg.chat.id, t)
 
-@bot.message_handler(func=lambda m:m.text=="📈 Stock Check" and m.from_user.id==OWNER_ID)
+@bot.message_handler(func=lambda m: m.text=="📈 Stock" and m.from_user.id==OWNER_ID)
 def ab_stock(msg):
-    bot.send_message(msg.chat.id,"⏳ Checking..."); _stock_report(msg.chat.id)
+    bot.send_message(msg.chat.id,"⏳ Dual API stock check..."); _stock_report(msg.chat.id)
 
-@bot.message_handler(func=lambda m:m.text=="💾 Export Users" and m.from_user.id==OWNER_ID)
+@bot.message_handler(func=lambda m: m.text=="💾 Export" and m.from_user.id==OWNER_ID)
 def ab_export(msg):
-    import io
     users=list(users_col.find({},{"user_id":1,"username":1,"full_name":1,"balance":1,"orders":1,"banned":1}))
-    lines=["ID | Name | Username | Balance | Orders | Banned"]
-    lines+=[f"{u['user_id']}|{u.get('full_name','N/A')}|@{u.get('username','N/A')}|₹{u['balance']}|{u.get('orders',0)}|{u.get('banned',False)}"
-            for u in users]
-    f=io.BytesIO("\n".join(lines).encode()); f.name=f"users_{datetime.utcnow().strftime('%Y%m%d')}.txt"
-    bot.send_document(msg.chat.id,f,caption=f"📦 Total: {len(users)} users")
+    lines=["ID|Name|Username|Balance|Orders|Banned"]
+    lines+=[f"{u['user_id']}|{u.get('full_name','N/A')}|@{u.get('username','N/A')}|₹{u.get('balance',0):.0f}|{u.get('orders',0)}|{u.get('banned',False)}" for u in users]
+    f=io.BytesIO("\n".join(lines).encode()); f.name=f"users_{datetime.utcnow().strftime('%Y%m%d_%H%M')}.txt"
+    bot.send_document(msg.chat.id, f, caption=f"📦 {len(users)} users")
 
-@bot.message_handler(func=lambda m:m.text=="🔙 Back" and m.from_user.id==OWNER_ID)
-def ab_back(msg): bot.send_message(msg.chat.id,"🏠",reply_markup=mk_main(OWNER_ID))
+@bot.message_handler(func=lambda m: m.text=="🔙 Back" and m.from_user.id==OWNER_ID)
+def ab_back(msg): bot.send_message(msg.chat.id,"🏠",reply_markup=main_menu(OWNER_ID))
 
-def _stats(cid):
-    tu=users_col.count_documents({})
-    bu=users_col.count_documents({"banned":True})
-    to=orders_col.count_documents({})
-    do=orders_col.count_documents({"status":"done"})
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def _send_stats(cid):
+    tu=users_col.count_documents({}); bu=users_col.count_documents({"banned":True})
+    to=orders_col.count_documents({}); do=orders_col.count_documents({"status":"done"})
     co=orders_col.count_documents({"status":"cancelled"})
     pd=deposits_col.count_documents({"status":"pending"})
-    ag=list(orders_col.aggregate([{"$match":{"status":"done"}},
-        {"$group":{"_id":None,"rev":{"$sum":"$amount"},"pft":{"$sum":"$profit"}}}]))
-    rev=ag[0]['rev'] if ag else 0; pft=ag[0]['pft'] if ag else 0
+    # Revenue by source
+    agg=list(orders_col.aggregate([{"$match":{"status":"done"}},
+        {"$group":{"_id":"$source","rev":{"$sum":"$amount"},"cnt":{"$sum":1}}}]))
+    rev5=psa=0; cnt5=cnsa=0
+    for x in agg:
+        if x['_id']=='5sim': rev5=x['rev']; cnt5=x['cnt']
+        else: psa+=x['rev']; cnsa+=x['cnt']
+    total_rev=rev5+psa
     bot.send_message(cid,
         f"📊 *Bot Statistics*\n\n"
-        f"👥 Users:       `{tu}` (🚫{bu})\n"
-        f"🛒 Orders:      `{to}`\n"
-        f"✅ Done:        `{do}`\n"
-        f"❌ Cancelled:   `{co}`\n"
-        f"📥 Pending Dep: `{pd}`\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 Revenue:     `₹{rev}`\n"
-        f"📈 Net Profit:  `₹{pft}`\n"
-        f"📊 Margin:      `{int(PROFIT_PCT*100)}%`")
+        f"👥 Users:         `{tu}` (🚫{bu})\n"
+        f"🛒 Total Orders:  `{to}` ✅{do} ❌{co}\n"
+        f"📥 Pending Dep:   `{pd}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 Total Revenue: `₹{total_rev:.0f}`\n"
+        f"5️⃣ 5sim Revenue:   `₹{rev5:.0f}` ({cnt5} orders)\n"
+        f"📱 SMSAct Revenue:`₹{psa:.0f}` ({cnsa} orders)\n"
+        f"📊 Margin: `40%`")
 
-def _uinfo(cid,uid):
+def _send_uinfo(cid, uid):
     u=get_user(uid); uo=orders_col.count_documents({"user_id":uid,"status":"done"})
+    o5=orders_col.count_documents({"user_id":uid,"source":"5sim","status":"done"})
+    osa=uo-o5
     bot.send_message(cid,
-        f"👤 *User Info*\n🆔 `{u['user_id']}`\n"
-        f"📛 {u.get('full_name','N/A')} @{u.get('username','N/A')}\n"
-        f"💵 ₹{u['balance']} | 🛒 {uo} orders\n"
-        f"💸 Spent: ₹{u.get('total_spent',0)} | 🌟 Reseller: {u.get('is_reseller',False)}\n"
-        f"🚫 Banned: {u.get('banned',False)} | 📅 {str(u.get('joined_at',''))[:10]}")
+        f"👤 *User Info*\n🆔`{u['user_id']}`\n"
+        f"📛{u.get('full_name','N/A')} @{u.get('username','N/A')}\n"
+        f"💵₹{u.get('balance',0):.0f} | 🛒{uo} orders (5️⃣{o5} 📱{osa})\n"
+        f"💸₹{u.get('total_spent',0):.0f} spent | 🚫{u.get('banned',False)}\n"
+        f"📅{str(u.get('joined_at',''))[:10]}")
 
-def _bc(cid,text):
+def _do_broadcast(cid, text):
     all_u=list(users_col.find({"banned":{"$ne":True}}))
     pm=bot.send_message(cid,f"📢 {len(all_u)} users ko bhej rahe hain...")
     s=f=0
@@ -643,237 +1170,123 @@ def _bc(cid,text):
     bot.edit_message_text(f"✅ Sent:`{s}` Failed:`{f}`",cid,pm.message_id)
 
 def _stock_report(cid):
-    checks=[("WhatsApp","russia","whatsapp","🇷🇺"),("WhatsApp","india","whatsapp","🇮🇳"),
-            ("WhatsApp","usa","whatsapp","🇺🇸"),("Telegram","russia","telegram","🇷🇺"),
-            ("Telegram","india","telegram","🇮🇳"),("Instagram","russia","instagram","🇷🇺"),
-            ("Gmail","russia","google","🇷🇺"),("Gmail","india","google","🇮🇳")]
-    t="📈 *Live Stock*\n\n"; lows=[]
+    checks=[
+        ("WhatsApp","russia","whatsapp","🇷🇺"),("WhatsApp","india","whatsapp","🇮🇳"),
+        ("WhatsApp","usa","whatsapp","🇺🇸"),("WhatsApp","uk","whatsapp","🇬🇧"),
+        ("Telegram","russia","telegram","🇷🇺"),("Telegram","india","telegram","🇮🇳"),
+        ("Instagram","russia","instagram","🇷🇺"),("Gmail","russia","google","🇷🇺"),
+    ]
+    t="📈 *Dual API Stock*\n\n"; lows=[]
     for svc,cc,api,flag in checks:
-        _pcache.pop(f"{cc}|{api}",None); buy,cnt=live_ps(cc,api)
-        if buy:
-            s=sellp(buy); ic="🔴" if cnt<=LOW_STOCK_LIMIT else("🟡" if cnt<=20 else "🟢")
-            t+=f"{ic}{flag}{cc.title()} {svc}: `{cnt}` | ₹{s}\n"
-            if cnt<=LOW_STOCK_LIMIT: lows.append(f"{flag}{cc.title()} {svc}: *{cnt} left!*")
-        else: t+=f"⚫{flag}{cc.title()} {svc}: Unavailable\n"
-    t+=f"\n_{datetime.utcnow().strftime('%H:%M')} UTC_"
+        _pc.pop(f"{cc}|{api}",None)
+        p5,s5=_5sim_price_stock(cc,api)
+        psa,ssa=_smsact_price_stock(cc,api)
+        total=s5+ssa
+        # Best price
+        best_p=min([x for x in [p5,psa] if x and x>0],default=None) if (p5 or psa) else None
+        ic="🔴" if total<=LOW_STOCK else("🟡" if total<=20 else "🟢")
+        if total>0:
+            t+=f"{ic}{flag}{cc.title()} {svc}: 5️⃣{s5}+📱{ssa}={total} | ₹{best_p or '?'}\n"
+            if total<=LOW_STOCK: lows.append(f"{flag}{cc.title()} {svc}:{total} left!")
+        else:
+            t+=f"⚫{flag}{cc.title()} {svc}: Both APIs Out!\n"
+    t+=f"\n5️⃣=5sim 📱=SMSActivate\n_{datetime.utcnow().strftime('%H:%M')} UTC_"
     bot.send_message(cid,t)
     if lows:
-        bot.send_message(OWNER_ID,"⚠️ *LOW STOCK!*\n\n"+"\n".join(lows)+"\n\n💡 5sim.net balance add karein!")
+        bot.send_message(OWNER_ID,"⚠️ *LOW STOCK BOTH APIs!*\n\n"+"\n".join(lows)+
+            "\n\n5sim: https://5sim.net\nSMSAct: https://sms-activate.org")
 
 def _stock_monitor():
     while True:
         time.sleep(1800)
         try:
             lows=[]
-            for svc,cc,api,flag in [("WhatsApp","russia","whatsapp","🇷🇺"),("WhatsApp","india","whatsapp","🇮🇳"),
-                                     ("Telegram","russia","telegram","🇷🇺"),("Telegram","india","telegram","🇮🇳")]:
-                _pcache.pop(f"{cc}|{api}",None); buy,cnt=live_ps(cc,api)
-                if buy is not None and cnt<=LOW_STOCK_LIMIT:
-                    lows.append(f"{flag}{cc.title()} {svc}: *{cnt} bache!*")
-            if lows: bot.send_message(OWNER_ID,"⚠️ *LOW STOCK ALERT!*\n\n"+"\n".join(lows)+"\n\n💡 https://5sim.net")
+            for svc,cc,api,flag in [
+                ("WhatsApp","russia","whatsapp","🇷🇺"),("WhatsApp","india","whatsapp","🇮🇳"),
+                ("Telegram","russia","telegram","🇷🇺"),("Telegram","india","telegram","🇮🇳"),
+            ]:
+                _pc.pop(f"{cc}|{api}",None)
+                p5,s5=_5sim_price_stock(cc,api); psa,ssa=_smsact_price_stock(cc,api)
+                total=s5+ssa
+                if total<=LOW_STOCK: lows.append(f"{flag}{cc.title()} {svc}:{total}")
+            if lows: bot.send_message(OWNER_ID,"⚠️ *LOW STOCK!*\n\n"+"\n".join(lows)+
+                "\n\n5sim:https://5sim.net\nSMSAct:https://sms-activate.org")
         except Exception as e: logger.error(f"Stock monitor: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  MY ORDERS
+#  OTHER HANDLERS
 # ══════════════════════════════════════════════════════════════════════════════
-@bot.message_handler(func=lambda m:m.text=="📋 My Orders")
+@bot.message_handler(func=lambda m: m.text=="📋 My Orders")
 @ban_check
 @join_check
 def my_orders(msg):
     orders=list(orders_col.find({"user_id":msg.from_user.id}).sort("created_at",-1).limit(7))
-    if not orders: bot.send_message(msg.chat.id,"📭 Koi order nahi."); return
+    if not orders: bot.send_message(msg.chat.id,"📭 Koi order nahi.\nService chunein aur number khareedein!"); return
     t="📋 *Your Orders*\n\n"
     for o in orders:
         ic="✅" if o['status']=="done" else("❌" if o['status']=="cancelled" else "⏳")
-        t+=f"{ic} `{o['number']}`\n   {o['service']} | ₹{o['amount']}\n   {o['created_at'].strftime('%d %b %H:%M')}\n\n"
+        src="5️⃣" if o.get('source')=='5sim' else "📱"
+        t+=f"{ic}{src} `{o['number']}`\n   {o['service']} ₹{o['amount']:.0f}\n   {o['created_at'].strftime('%d %b %H:%M')}\n\n"
     bot.send_message(msg.chat.id,t)
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  EARN MONEY
-# ══════════════════════════════════════════════════════════════════════════════
-@bot.message_handler(func=lambda m:m.text=="💸 Earn Money")
-@ban_check
-@join_check
-def earn_money(msg):
-    uid=msg.from_user.id; u=get_user(uid)
-    link=f"https://t.me/{bot.get_me().username}?start={uid}"
-    m=types.InlineKeyboardMarkup()
-    if not u.get('is_reseller'):
-        m.add(types.InlineKeyboardButton("🌟 Reseller Banen",
-            url=f"https://t.me/{SUPPORT_BOT.replace('@','')}"))
-    bot.send_message(msg.chat.id,
-        f"💸 *Earn Money — 3 Tarike*\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"*1️⃣ Referral*\n"
-        f"   Har refer par *₹10* automatic\n"
-        f"   Referrals: `{u.get('referrals',0)}` = ₹{u.get('referrals',0)*10}\n"
-        f"   🔗 `{link}`\n\n"
-        f"*2️⃣ Reseller* {'✅ Active' if u.get('is_reseller') else '❌ Not Active'}\n"
-        f"   Numbers khareed ke dosto ko becho\n"
-        f"   Example: ₹65 ka number → ₹120 mein becho\n"
-        f"   *₹55 profit* per number!\n\n"
-        f"*3️⃣ Channel Promote*\n"
-        f"   Apna channel banao\n"
-        f"   Bot link share karo\n"
-        f"   Har join par referral income!\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 Total Earned: `₹{u.get('total_earned',0)}`",reply_markup=m if not u.get('is_reseller') else types.InlineKeyboardMarkup())
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  REFER / HELP / PROOF / SUPPORT
-# ══════════════════════════════════════════════════════════════════════════════
-@bot.message_handler(func=lambda m:m.text=="👥 Refer & Earn")
+@bot.message_handler(func=lambda m: m.text=="👥 Refer & Earn")
 @ban_check
 @join_check
 def refer(msg):
-    uid=msg.from_user.id; u=get_user(uid)
-    link=f"https://t.me/{bot.get_me().username}?start={uid}"
+    m=types.InlineKeyboardMarkup(row_width=1)
+    m.add(types.InlineKeyboardButton("🔗 Earning Link",url=WA_EARN_LINK),
+          types.InlineKeyboardButton("🎥 Video Tutorial",url=WA_EARN_VIDEO),
+          types.InlineKeyboardButton("👥 Group",url=GROUP_LINK))
     bot.send_message(msg.chat.id,
-        f"👥 *Refer & Earn*\n\nHar refer par *₹10* milta hai!\n\n"
-        f"Referrals: `{u.get('referrals',0)}` | Earned: `₹{u.get('referrals',0)*10}`\n\n"
-        f"🔗 *Your Link:*\n`{link}`")
+        f"👥 *{WA_EARN_NAME}*\n\n🔗 `{WA_EARN_LINK}`\n\n"
+        f"1️⃣ Link copy karein\n2️⃣ Share karein\n3️⃣ Earn karein! 💰\n\n"
+        f"🎥 Tutorial niche 👇",reply_markup=m)
 
-@bot.message_handler(func=lambda m:m.text=="❓ Help")
+@bot.message_handler(func=lambda m: m.text in ["🆘 Help","❓ Help"])
 def help_btn(msg):
     m=types.InlineKeyboardMarkup(row_width=1)
-    m.add(types.InlineKeyboardButton("🤖 Help Bot — Direct Support",
-              url=f"https://t.me/{SUPPORT_BOT.replace('@','')}"),
-          types.InlineKeyboardButton("📢 Proof Channel",url=PROOF_CHANNEL_LINK),
-          types.InlineKeyboardButton("👥 Join Group",url=GROUP_LINK))
+    m.add(types.InlineKeyboardButton(f"🤖 {SUPPORT_BOT}",url=f"https://t.me/{SUPPORT_BOT.replace('@','')}"),
+          types.InlineKeyboardButton("📢 Proof",url=PROOF_CHANNEL_LINK),
+          types.InlineKeyboardButton("👥 Group",url=GROUP_LINK))
     bot.send_message(msg.chat.id,
-        "❓ *Help & FAQ*\n\n"
-        "🔹 *Number kaise khareedein?*\n   Service → Country → Confirm\n\n"
-        "🔹 *Balance add kaise?*\n   Wallet → USDT → Admin contact → Pay → Screenshot\n\n"
-        "🔹 *OTP nahi aaya?*\n   5 min wait → Auto Refund\n\n"
-        "🔹 *Earn kaise karein?*\n   Earn Money button dabayein\n\n"
-        "🆘 *Help Bot par jaayein* 👇",reply_markup=m)
+        "❓ *Help*\n\n"
+        "🔹 Buy Number → Service → Country\n"
+        "🔹 Wallet → USDT/UPI → Admin → Pay\n"
+        "🔹 OTP nahi aaya? → 5 min → Auto Refund\n"
+        "🔹 1 USDT = ₹85 | 40% Margin\n"
+        "🔹 Dual API: 5sim + SMS-Activate\n\n"
+        f"🆘 {SUPPORT_BOT} 👇",reply_markup=m)
 
-@bot.message_handler(func=lambda m:m.text=="📊 Proof")
+@bot.message_handler(func=lambda m: m.text=="📊 Proof")
 def proof_btn(msg):
     m=types.InlineKeyboardMarkup()
     m.add(types.InlineKeyboardButton("📢 Proof Channel",url=PROOF_CHANNEL_LINK))
-    bot.send_message(msg.chat.id,"📊 *Proof Channel*\n\n✅ Har successful OTP proof auto post hota hai.",reply_markup=m)
+    bot.send_message(msg.chat.id,"📊 *Proof*\n\n✅ Har OTP aur deposit automatically proof channel mein post hota hai!",reply_markup=m)
 
-@bot.message_handler(func=lambda m:m.text=="📞 Support")
+@bot.message_handler(func=lambda m: m.text=="📞 Support")
 def support_btn(msg):
     m=types.InlineKeyboardMarkup()
-    m.add(types.InlineKeyboardButton("💬 Support Bot",url=f"https://t.me/{SUPPORT_BOT.replace('@','')}"))
+    m.add(types.InlineKeyboardButton(f"💬 {SUPPORT_BOT}",url=f"https://t.me/{SUPPORT_BOT.replace('@','')}"))
     bot.send_message(msg.chat.id,f"📞 *Support*\n{SUPPORT_BOT}\n⏰ 10AM-10PM IST",reply_markup=m)
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  BUY FLOW
-# ══════════════════════════════════════════════════════════════════════════════
-@bot.message_handler(func=lambda m:m.text in ALL_BTNS)
-@ban_check
-@join_check
-def show_countries(msg):
-    cat=msg.text; items=SERVICES.get(cat,{})
-    lm=bot.send_message(msg.chat.id,f"⏳ *{cat}* — Live data loading...")
-    mk=types.InlineKeyboardMarkup(row_width=1)
-    for key,info in items.items():
-        buy,cnt=live_ps(info['cc'],info['api'])
-        if buy and cnt>0:
-            s=sellp(buy); si="🔴" if cnt<=5 else("🟡" if cnt<=20 else "🟢")
-            mk.add(types.InlineKeyboardButton(
-                f"{info['flag']} {info['country']}  ·  ₹{s}  {si}{cnt}",callback_data=f"buy_{key}"))
-        else:
-            mk.add(types.InlineKeyboardButton(
-                f"{info['flag']} {info['country']}  ·  ❌ Out of Stock",callback_data="oos"))
-    mk.add(types.InlineKeyboardButton("🔙 Main Menu",callback_data="gomn"))
-    bot.edit_message_text(
-        f"{cat} — *Country chunein:*\n🟢OK 🟡Low 🔴Critical ❌Out\n_60% margin included_",
-        lm.chat.id,lm.message_id,reply_markup=mk)
-
-@bot.callback_query_handler(func=lambda c:c.data=="oos")
-def cb_oos(call): bot.answer_callback_query(call.id,"❌ Stock khatam! Dusri try karein.",show_alert=True)
-
-@bot.callback_query_handler(func=lambda c:c.data=="gomn")
-def cb_gomn(call): bot.send_message(call.message.chat.id,"🏠",reply_markup=mk_main(call.from_user.id))
-
-@bot.callback_query_handler(func=lambda c:c.data.startswith("buy_"))
-def cb_buy(call):
-    if is_banned(call.from_user.id): return bot.answer_callback_query(call.id,"🚫 Ban.",show_alert=True)
-    if not is_member(call.from_user.id) and call.from_user.id!=OWNER_ID:
-        return bot.answer_callback_query(call.id,"⚠️ Pehle Join karein!",show_alert=True)
-    key=call.data[4:]; svc,cat=find_svc(key)
-    if not svc: return bot.answer_callback_query(call.id,"❌ Invalid.",show_alert=True)
-    buy,cnt=live_ps(svc['cc'],svc['api'])
-    if not buy or cnt==0: return bot.answer_callback_query(call.id,"❌ Stock khatam!",show_alert=True)
-    sell=sellp(buy); u=get_user(call.from_user.id)
-    if u['balance']<sell:
-        return bot.answer_callback_query(call.id,
-            f"❌ Balance kam!\nChahiye:₹{sell}\nHai:₹{u['balance']}\nKam:₹{sell-u['balance']}",show_alert=True)
-    bot.answer_callback_query(call.id,"⏳ Number dhundh rahe hain...")
-    sm=bot.send_message(call.message.chat.id,
-        f"🔄 *Processing...*\n{svc['flag']} {svc['country']} {cat}\n💵 ₹{sell}")
-    url=f"https://5sim.net/v1/user/buy/activation/{svc['cc']}/any/{svc['api']}"
-    try: res=requests.get(url,headers=SIM_HEADERS,timeout=15).json()
-    except Exception as e:
-        logger.error(e); bot.edit_message_text("❌ API Error. Baad mein try karein.",call.message.chat.id,sm.message_id); return
-    if 'phone' in res:
-        oid=res['id']; num=res['phone']; nb=u['balance']-sell
-        users_col.update_one({"user_id":call.from_user.id},{"$inc":{"balance":-sell,"orders":1,"total_spent":sell}})
-        log_order(call.from_user.id,cat,svc,num,oid,buy,sell)
-        bot.edit_message_text(
-            f"✅ *Number mila!*\n\n📞 `{num}`\n{svc['flag']} {svc['country']} {cat}\n"
-            f"💵 ₹{sell} | Balance: ₹{nb}\n\n⏳ *OTP wait...* _(5 min → Auto Refund)_",
-            call.message.chat.id,sm.message_id)
-        Thread(target=_otp_wait,args=(call.message.chat.id,call.from_user.id,oid,sell,num,svc,cat,nb),daemon=True).start()
-    else:
-        bot.edit_message_text(f"❌ Number nahi mila\n{res.get('message','')}\n_Balance safe._",
-            call.message.chat.id,sm.message_id)
-
-# ── OTP + Proof ────────────────────────────────────────────────────────────────
-def _post_proof(uid,num,svc,cat,amt,otp):
-    u=users_col.find_one({"user_id":uid}) or {}
-    name=u.get('full_name') or f"User{str(uid)[-4:]}"
-    masked=num[:4]+"****"+num[-2:] if len(num)>6 else num
-    try:
-        bot.send_message(PROOF_CHANNEL_ID,
-            f"✅ *OTP Delivered!*\n\n📞 `{masked}`\n{svc['flag']} {svc['country']} {cat}\n"
-            f"💵 ₹{amt}\n🔑 OTP: `{otp}`\n👤 {name}\n"
-            f"🕐 {datetime.utcnow().strftime('%d %b %Y %H:%M')} UTC\n\n"
-            f"🔥 *OtpKing Store*\n{CHANNEL_LINK}")
-    except Exception as e: logger.warning(f"Proof: {e}")
-
-def _otp_wait(cid,uid,oid,refund,num,svc,cat,rbal):
-    for _ in range(30):
-        time.sleep(10)
-        try:
-            r=requests.get(f"https://5sim.net/v1/user/check/{oid}",headers=SIM_HEADERS,timeout=10).json()
-        except Exception as e: logger.error(e); continue
-        if r.get('sms'):
-            otp=r['sms'][0]['code']
-            orders_col.update_one({"order_id":oid},{"$set":{"status":"done","otp":otp}})
-            bot.send_message(cid,
-                f"🎉 *OTP aa gaya!*\n\n📞 `{num}`\n{svc['flag']} {svc['country']} {cat}\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n🔑 *OTP:* `{otp}`\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━\n💰 Balance: ₹{rbal}\n✅ Done! 🙏")
-            Thread(target=_post_proof,args=(uid,num,svc,cat,refund,otp),daemon=True).start()
-            return
-    try: requests.get(f"https://5sim.net/v1/user/cancel/{oid}",headers=SIM_HEADERS,timeout=10)
-    except: pass
-    orders_col.update_one({"order_id":oid},{"$set":{"status":"cancelled"}})
-    users_col.update_one({"user_id":uid},{"$inc":{"balance":refund,"total_spent":-refund}})
-    bot.send_message(cid,f"❌ *OTP Timeout*\n📞 `{num}`\n\n💰 *₹{refund} Refund ho gaya!*")
-
-# ── Gaali filter on ALL messages ──────────────────────────────────────────────
-@bot.message_handler(func=lambda m:True)
+@bot.message_handler(func=lambda m: True)
 @gaali_check
 def fallback(msg):
-    bot.send_message(msg.chat.id,"❓ Buttons use karein 👇",reply_markup=mk_main(msg.from_user.id))
+    bot.send_message(msg.chat.id,"❓ Buttons use karein 👇",reply_markup=main_menu(msg.from_user.id))
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  MAIN — single instance with retry
+#  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__=="__main__":
-    logger.info("🤖 OtpKing Bot starting...")
+    logger.info("👑 OtpKing Pro (Dual API) starting...")
     Thread(target=_stock_monitor,daemon=True).start()
+    retry=0
     while True:
         try:
-            logger.info("Starting polling...")
-            bot.polling(none_stop=True, interval=0, timeout=20)
+            logger.info(f"✅ Polling (attempt {retry+1})")
+            bot.polling(none_stop=True,interval=0,timeout=20)
+            retry=0
         except Exception as e:
+            retry+=1; wait=min(retry*5,30)
             logger.error(f"Polling error: {e}")
-            time.sleep(5)
-            clear_webhook_and_updates()
+            time.sleep(wait); clear_session()
