@@ -590,8 +590,9 @@ def admin_menu():
     m.add("📦 Orders", "📈 Stock")
     m.add("➕ Platform Add", "💾 Export")
     m.add("📡 Force Ch Manage", "⚙️ Bot Settings")
-    m.add("💰 Balance Adjust", "🔍 User Search")   # NEW
-    m.add("📜 Balance Log")                          # NEW
+    m.add("💰 Balance Adjust", "🔍 User Search")
+    m.add("📜 Balance Log", "💵 Quick Balance")   # NEW: Quick balance add/deduct
+    m.add("📊 Live Price Check")                   # NEW: Live price checker
     m.add("🔙 Back")
     return m
 
@@ -600,6 +601,7 @@ ADMIN_BTNS = {
     "📡 Channels","📢 Broadcast","🏆 Top Buyers","📦 Orders","📈 Stock",
     "➕ Platform Add","💾 Export","📡 Force Ch Manage","⚙️ Bot Settings",
     "💰 Balance Adjust","🔍 User Search","📜 Balance Log",
+    "💵 Quick Balance","📊 Live Price Check",  # NEW
     "🔙 Back","⚙️ Admin Panel",
     "📲 Buy Number","💰 Wallet","📋 My Orders","👥 Refer & Earn",
     "📊 Proof","🆘 Help","📞 Support",
@@ -1360,24 +1362,24 @@ def ab_balance_log(msg):
     bot.send_message(msg.chat.id, t)
 
 def _show_user_for_adjust(cid, u):
-    """Show user info with balance add/deduct buttons"""
+    """Show user info with balance add/deduct buttons — minimum ₹100"""
     uid = u['user_id']
     orders_cnt = orders_col.count_documents({"user_id": uid, "status": "done"})
-    mk = types.InlineKeyboardMarkup(row_width=2)
+    mk = types.InlineKeyboardMarkup(row_width=3)
     mk.add(
-        types.InlineKeyboardButton("➕ ₹50",   callback_data=f"badj_add_{uid}_50"),
         types.InlineKeyboardButton("➕ ₹100",  callback_data=f"badj_add_{uid}_100"),
         types.InlineKeyboardButton("➕ ₹200",  callback_data=f"badj_add_{uid}_200"),
         types.InlineKeyboardButton("➕ ₹500",  callback_data=f"badj_add_{uid}_500"),
         types.InlineKeyboardButton("➕ ₹1000", callback_data=f"badj_add_{uid}_1000"),
+        types.InlineKeyboardButton("➕ ₹2000", callback_data=f"badj_add_{uid}_2000"),
         types.InlineKeyboardButton("➕ Custom", callback_data=f"badj_add_{uid}_custom"),
     )
     mk.add(
-        types.InlineKeyboardButton("➖ ₹50",   callback_data=f"badj_ded_{uid}_50"),
         types.InlineKeyboardButton("➖ ₹100",  callback_data=f"badj_ded_{uid}_100"),
         types.InlineKeyboardButton("➖ ₹200",  callback_data=f"badj_ded_{uid}_200"),
         types.InlineKeyboardButton("➖ ₹500",  callback_data=f"badj_ded_{uid}_500"),
         types.InlineKeyboardButton("➖ ₹1000", callback_data=f"badj_ded_{uid}_1000"),
+        types.InlineKeyboardButton("➖ ₹2000", callback_data=f"badj_ded_{uid}_2000"),
         types.InlineKeyboardButton("➖ Custom", callback_data=f"badj_ded_{uid}_custom"),
     )
     mk.add(
@@ -1394,7 +1396,7 @@ def _show_user_for_adjust(cid, u):
         f"💸 Total Spent: `₹{u.get('total_spent',0):.0f}`\n"
         f"📅 Joined: {u.get('joined_at', datetime.utcnow()).strftime('%d %b %Y')}\n"
         f"Status: {ban_status}\n\n"
-        f"👇 Balance adjust karein:", reply_markup=mk)
+        f"⚠️ Minimum: *₹100* | 👇 Balance adjust karein:", reply_markup=mk)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("badj_"))
 def cb_balance_adjust(call):
@@ -1494,6 +1496,7 @@ def cmd_cancel(msg):
     _settings_state.pop(OWNER_ID, None)
     _bal_adjust_state.pop(OWNER_ID, None)
     _user_search_state.pop(OWNER_ID, None)
+    _quick_bal_state.pop(OWNER_ID, None)
     bot.reply_to(msg, "✅ Cancel ho gaya.")
 
 @bot.message_handler(commands=['cancel_add'])
@@ -1516,6 +1519,7 @@ def cmd_cancel_add(msg):
         or OWNER_ID in _settings_state
         or OWNER_ID in _bal_adjust_state
         or OWNER_ID in _user_search_state
+        or OWNER_ID in _quick_bal_state
     )
 ))
 def handle_admin_text_states(msg):
@@ -1960,6 +1964,424 @@ def ab_add_plat(msg):
     bot.send_message(msg.chat.id,
         "➕ *Naya Earning Platform Add Karein*\n\n"
         "*Step 1/3:* Platform ka naam?\n_Example: Amazon Associate_")
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ★★★ NEW: QUICK BALANCE ADD/DEDUCT PANEL ★★★
+#  Admin sirf ID daal ke directly balance add ya deduct kar sakta hai
+#  Minimum ₹100 enforced | Custom amount bhi possible
+# ══════════════════════════════════════════════════════════════════════════════
+_quick_bal_state = {}  # {OWNER_ID: {"step": "uid"/"amount", "action": "add"/"deduct", "uid": int}}
+
+@bot.message_handler(func=lambda m: m.text == "💵 Quick Balance" and m.from_user.id == OWNER_ID)
+def ab_quick_balance(msg):
+    """Admin Panel se directly balance add/deduct karein"""
+    mk = types.InlineKeyboardMarkup(row_width=2)
+    mk.add(
+        types.InlineKeyboardButton("➕ Balance Add Karein",    callback_data="qbal_start_add"),
+        types.InlineKeyboardButton("➖ Balance Deduct Karein", callback_data="qbal_start_deduct"),
+    )
+    mk.add(
+        types.InlineKeyboardButton("🔄 Balance Set Karein (Exact)", callback_data="qbal_start_set"),
+    )
+    bot.send_message(msg.chat.id,
+        "💵 *Quick Balance Management*\n\n"
+        "👇 Kya karna hai chunein:\n\n"
+        "➕ *Add* — User ka balance badhao\n"
+        "➖ *Deduct* — User ka balance ghataao\n"
+        "🔄 *Set* — Exact balance set karo\n\n"
+        "⚠️ Minimum add/deduct: *₹100*",
+        reply_markup=mk)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("qbal_start_"))
+def cb_qbal_start(call):
+    if call.from_user.id != OWNER_ID: return
+    action = call.data.replace("qbal_start_", "")  # add / deduct / set
+    _quick_bal_state[OWNER_ID] = {"step": "uid", "action": action}
+    bot.answer_callback_query(call.id)
+    action_text = "ADD ➕" if action == "add" else ("DEDUCT ➖" if action == "deduct" else "SET 🔄")
+    bot.send_message(OWNER_ID,
+        f"💵 *Balance {action_text}*\n\n"
+        f"User ka *ID* ya *@username* bhejein:\n"
+        f"_Example: `12345678` ya `@username`_\n\n"
+        f"/cancel se cancel karein")
+
+@bot.message_handler(func=lambda m: (
+    m.from_user.id == OWNER_ID
+    and OWNER_ID in _quick_bal_state
+    and m.text not in ADMIN_BTNS
+    and not (m.text or "").startswith('/')
+))
+def handle_quick_bal_state(msg):
+    txt = (msg.text or "").strip()
+    state = _quick_bal_state.get(OWNER_ID, {})
+
+    if state.get("step") == "uid":
+        # Find user
+        if txt.startswith('@'):
+            u = find_user_by_username(txt)
+        else:
+            try: u = users_col.find_one({"user_id": int(txt)})
+            except: u = None
+        if not u:
+            bot.send_message(msg.chat.id, f"❌ User `{txt}` nahi mila. Dobara try karein ya /cancel"); return
+        _quick_bal_state[OWNER_ID]["step"] = "amount"
+        _quick_bal_state[OWNER_ID]["uid"] = u["user_id"]
+        action = state["action"]
+        action_text = "ADD ➕" if action == "add" else ("DEDUCT ➖" if action == "deduct" else "SET 🔄")
+
+        # Show quick amount buttons
+        uid = u["user_id"]
+        mk = types.InlineKeyboardMarkup(row_width=3)
+        if action in ("add", "deduct"):
+            prefix = "qadd" if action == "add" else "qded"
+            mk.add(
+                types.InlineKeyboardButton("₹100",  callback_data=f"{prefix}_qb_{uid}_100"),
+                types.InlineKeyboardButton("₹200",  callback_data=f"{prefix}_qb_{uid}_200"),
+                types.InlineKeyboardButton("₹500",  callback_data=f"{prefix}_qb_{uid}_500"),
+                types.InlineKeyboardButton("₹1000", callback_data=f"{prefix}_qb_{uid}_1000"),
+                types.InlineKeyboardButton("₹2000", callback_data=f"{prefix}_qb_{uid}_2000"),
+                types.InlineKeyboardButton("₹5000", callback_data=f"{prefix}_qb_{uid}_5000"),
+            )
+            mk.add(types.InlineKeyboardButton("✏️ Custom Amount", callback_data=f"{prefix}_qb_{uid}_custom"))
+        else:
+            mk.add(types.InlineKeyboardButton("✏️ Amount bhejein", callback_data=f"qset_qb_{uid}_custom"))
+        mk.add(types.InlineKeyboardButton("❌ Cancel", callback_data="qbal_cancel"))
+
+        bot.send_message(msg.chat.id,
+            f"✅ User mila!\n"
+            f"👤 `{uid}` — {u.get('full_name','?')} @{u.get('username','N/A')}\n"
+            f"💵 Current Balance: *₹{u.get('balance',0):.0f}*\n\n"
+            f"*{action_text}* — Amount chunein 👇\n"
+            f"_(Minimum: ₹100)_", reply_markup=mk)
+
+    elif state.get("step") == "custom_amount":
+        uid = state.get("uid")
+        action = state.get("action")
+        try:
+            amount = float(txt)
+        except:
+            bot.send_message(msg.chat.id, "❌ Sirf number bhejein! (e.g. `500`)"); return
+        if action in ("add", "deduct") and amount < 100:
+            bot.send_message(msg.chat.id, "❌ *Minimum ₹100* chahiye!\nDobara bhejein:"); return
+        _quick_bal_state.pop(OWNER_ID, None)
+        _execute_quick_balance(msg.chat.id, uid, amount, action)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("qadd_qb_") or c.data.startswith("qded_qb_") or c.data.startswith("qset_qb_"))
+def cb_qbal_amount(call):
+    if call.from_user.id != OWNER_ID: return
+    parts = call.data.split("_")
+    # qadd_qb_UID_AMOUNT or qded_qb_UID_AMOUNT or qset_qb_UID_custom
+    prefix = parts[0]  # qadd / qded / qset
+    action = "add" if prefix == "qadd" else ("deduct" if prefix == "qded" else "set")
+    uid = int(parts[2])
+    amount_str = parts[3]
+
+    if amount_str == "custom":
+        _quick_bal_state[OWNER_ID] = {"step": "custom_amount", "action": action, "uid": uid}
+        bot.answer_callback_query(call.id)
+        u = users_col.find_one({"user_id": uid}) or {}
+        bot.send_message(OWNER_ID,
+            f"✏️ *Custom Amount*\n\n"
+            f"User `{uid}` — Balance: ₹{u.get('balance',0):.0f}\n\n"
+            f"Amount bhejein ({'Min ₹100' if action != 'set' else 'Exact amount'}):\n"
+            f"/cancel se cancel")
+        return
+
+    amount = float(amount_str)
+    bot.answer_callback_query(call.id, f"⏳ Processing...")
+    _quick_bal_state.pop(OWNER_ID, None)
+    _execute_quick_balance(call.message.chat.id, uid, amount, action)
+
+@bot.callback_query_handler(func=lambda c: c.data == "qbal_cancel")
+def cb_qbal_cancel(call):
+    if call.from_user.id != OWNER_ID: return
+    _quick_bal_state.pop(OWNER_ID, None)
+    bot.answer_callback_query(call.id, "✅ Cancel ho gaya")
+    bot.send_message(OWNER_ID, "✅ Cancel ho gaya.", reply_markup=admin_menu())
+
+def _execute_quick_balance(cid, uid, amount, action):
+    """Execute balance add/deduct/set and notify both admin and user"""
+    u_before = users_col.find_one({"user_id": uid}) or {}
+    bal_before = u_before.get('balance', 0)
+
+    if action == "add":
+        add_balance(uid, amount)
+        log_admin_balance_action(OWNER_ID, uid, amount, "add", "quick_balance_panel")
+        u_after = users_col.find_one({"user_id": uid}) or {}
+        new_bal = u_after.get('balance', 0)
+        bot.send_message(cid,
+            f"✅ *Balance Add Done!*\n\n"
+            f"👤 User: `{uid}`\n"
+            f"📛 {u_before.get('full_name','?')} @{u_before.get('username','N/A')}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💵 Pehle: ₹{bal_before:.0f}\n"
+            f"➕ Add: ₹{amount:.0f}\n"
+            f"💰 Naya: *₹{new_bal:.0f}*\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ User ko notify kar diya!")
+        try: bot.send_message(uid,
+            f"🎉 *₹{amount:.0f} Balance Add Hua!*\n\n"
+            f"💵 Pehle: ₹{bal_before:.0f}\n"
+            f"💰 Naya Balance: *₹{new_bal:.0f}*\n\n"
+            f"📲 Buy Number dabayein 🛒")
+        except: pass
+
+    elif action == "deduct":
+        add_balance(uid, -amount)
+        log_admin_balance_action(OWNER_ID, uid, amount, "deduct", "quick_balance_panel")
+        u_after = users_col.find_one({"user_id": uid}) or {}
+        new_bal = u_after.get('balance', 0)
+        bot.send_message(cid,
+            f"✅ *Balance Deduct Done!*\n\n"
+            f"👤 User: `{uid}`\n"
+            f"📛 {u_before.get('full_name','?')} @{u_before.get('username','N/A')}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💵 Pehle: ₹{bal_before:.0f}\n"
+            f"➖ Deduct: ₹{amount:.0f}\n"
+            f"💰 Naya: *₹{new_bal:.0f}*")
+        try: bot.send_message(uid,
+            f"❕ *Balance Update Hua*\n\n"
+            f"₹{amount:.0f} adjust hua.\n"
+            f"💰 Naya Balance: *₹{new_bal:.0f}*")
+        except: pass
+
+    elif action == "set":
+        users_col.update_one({"user_id": uid}, {"$set": {"balance": amount}})
+        log_admin_balance_action(OWNER_ID, uid, amount, "set", "quick_balance_panel")
+        bot.send_message(cid,
+            f"✅ *Balance SET Done!*\n\n"
+            f"👤 User: `{uid}`\n"
+            f"📛 {u_before.get('full_name','?')} @{u_before.get('username','N/A')}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💵 Pehle: ₹{bal_before:.0f}\n"
+            f"🔄 Set: ₹{amount:.0f}")
+        try: bot.send_message(uid,
+            f"✅ *Balance Update Hua!*\n\n"
+            f"💰 Naya Balance: *₹{amount:.0f}*")
+        except: pass
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  ★★★ NEW: LIVE PRICE CHECKER ★★★
+#  SmsPool raw price + VakSMS raw price + Margin add kara hua price
+#  Admin ek button se check kar sakta hai
+# ══════════════════════════════════════════════════════════════════════════════
+@bot.message_handler(func=lambda m: m.text == "📊 Live Price Check" and m.from_user.id == OWNER_ID)
+def ab_live_price_check(msg):
+    """Show live price checker — service aur country chunein"""
+    mk = types.InlineKeyboardMarkup(row_width=2)
+    # Most popular services
+    services = [
+        ("📱 WhatsApp", "whatsapp"),
+        ("✈️ Telegram", "telegram"),
+        ("📸 Instagram", "instagram"),
+        ("📧 Gmail", "google"),
+        ("📘 Facebook", "facebook"),
+        ("🎵 TikTok", "tiktok"),
+        ("🐦 Twitter/X", "twitter"),
+        ("📷 Snapchat", "snapchat"),
+        ("🛒 Amazon", "amazon"),
+        ("💼 LinkedIn", "linkedin"),
+    ]
+    for label, api in services:
+        mk.add(types.InlineKeyboardButton(label, callback_data=f"lpc_svc_{api}"))
+    mk.add(types.InlineKeyboardButton("📊 Full Stock Report", callback_data="lpc_full_report"))
+    bot.send_message(msg.chat.id,
+        "📊 *Live Price Checker*\n\n"
+        "Service chunein — dono APIs ka *raw price* aur *margin wala price* dikhega:\n\n"
+        "🌐 SmsPool raw → margin price\n"
+        "🔷 VakSMS raw → margin price",
+        reply_markup=mk)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("lpc_svc_"))
+def cb_lpc_service(call):
+    if call.from_user.id != OWNER_ID: return
+    api = call.data.replace("lpc_svc_", "")
+    bot.answer_callback_query(call.id, "⏳ Countries load ho rahi hain...")
+
+    # Get countries for this service
+    countries = []
+    for svc_label, items in SERVICES.items():
+        for key, info in items.items():
+            if info['api'] == api and info['cc'] not in [c[0] for c in countries]:
+                countries.append((info['cc'], info['flag'], info['country']))
+
+    mk = types.InlineKeyboardMarkup(row_width=2)
+    for cc, flag, country in countries:
+        mk.add(types.InlineKeyboardButton(
+            f"{flag} {country}", callback_data=f"lpc_check_{api}_{cc}"))
+    mk.add(types.InlineKeyboardButton("🔄 Sabka Price Dikhao", callback_data=f"lpc_all_{api}"))
+    mk.add(types.InlineKeyboardButton("🔙 Back", callback_data="lpc_back"))
+
+    api_name = api.title()
+    bot.send_message(call.message.chat.id,
+        f"📊 *{api_name} — Country Chunein*\n\n"
+        f"Ek country select karein ya sabka price ek saath dekho:",
+        reply_markup=mk)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("lpc_check_"))
+def cb_lpc_check(call):
+    if call.from_user.id != OWNER_ID: return
+    parts = call.data.replace("lpc_check_", "").split("_", 1)
+    api = parts[0]; cc = parts[1]
+    bot.answer_callback_query(call.id, "⏳ Live price fetch ho raha hai...")
+
+    margin = get_margin()
+    usdt_rate = get_usdt_rate()
+
+    # Force fresh fetch
+    _pc.pop(f"{cc}|{api}", None)
+    psp_raw = None; pvk_raw = None
+    ssp = svk = 0
+
+    # SmsPool raw price
+    try:
+        if SMSPOOL_KEY:
+            country = SMSPOOL_CC.get(cc)
+            service = SMSPOOL_SVC.get(api)
+            if country and service:
+                r = requests.get(
+                    "https://api.smspool.net/service/price",
+                    params={"key": SMSPOOL_KEY, "country": country, "service": service},
+                    timeout=8).json()
+                raw_usd = float(r.get("price", 0))
+                ssp = int(r.get("stock", 0))
+                if raw_usd > 0:
+                    psp_raw = raw_usd
+    except Exception as e:
+        logger.warning(f"LPC SmsPool: {e}")
+
+    # VakSMS raw price
+    try:
+        if VAKSMS_KEY:
+            country = VAKSMS_CC.get(cc)
+            service = VAKSMS_SVC.get(api)
+            if country and service:
+                r = requests.get(
+                    "https://vak-sms.com/api/getCountOperator/",
+                    params={"apiKey": VAKSMS_KEY, "country": country, "service": service},
+                    timeout=8).json()
+                if isinstance(r, list) and r:
+                    best = None; total_s = 0
+                    for op in r:
+                        p = float(op.get("price", 0)); c = int(op.get("count", 0))
+                        total_s += c
+                        if c > 0 and (best is None or p < best): best = p
+                    svk = total_s
+                    if best:
+                        pvk_raw = best
+    except Exception as e:
+        logger.warning(f"LPC VakSMS: {e}")
+
+    dp, ds = _get_default_price(cc, api)
+    margin_pct = int((margin - 1) * 100)
+
+    # Flag and country name
+    flag_info = ""
+    for _, items in SERVICES.items():
+        for key, info in items.items():
+            if info['cc'] == cc and info['api'] == api:
+                flag_info = f"{info['flag']} {info['country']}"
+                break
+        if flag_info: break
+
+    t = f"📊 *Live Price — {flag_info} {api.title()}*\n"
+    t += f"━━━━━━━━━━━━━━━━━━━━━━\n"
+    t += f"📈 Margin: *{margin_pct}%* | USDT Rate: ₹{usdt_rate}\n\n"
+
+    if psp_raw:
+        sp_inr_raw = round(psp_raw * usdt_rate, 2)
+        sp_margin = math.ceil(psp_raw * usdt_rate * margin)
+        t += f"🌐 *SmsPool*\n"
+        t += f"  Raw: ${psp_raw:.4f} = ₹{sp_inr_raw:.2f}\n"
+        t += f"  +{margin_pct}% margin → *₹{sp_margin}*\n"
+        t += f"  📦 Stock: {ssp}\n\n"
+    else:
+        t += f"🌐 *SmsPool*: ❌ No price/stock\n\n"
+
+    if pvk_raw:
+        vk_margin = math.ceil(pvk_raw * margin)
+        t += f"🔷 *Vak-SMS*\n"
+        t += f"  Raw: ₽{pvk_raw:.2f}\n"
+        t += f"  +{margin_pct}% margin → *₹{vk_margin}*\n"
+        t += f"  📦 Stock: {svk}\n\n"
+    else:
+        t += f"🔷 *Vak-SMS*: ❌ No price/stock\n\n"
+
+    if dp:
+        t += f"📋 *Default (Fallback)*: ₹{dp} | Stock: {ds}\n\n"
+
+    if psp_raw or pvk_raw:
+        best = min([x for x in [
+            math.ceil(psp_raw * usdt_rate * margin) if psp_raw else None,
+            math.ceil(pvk_raw * margin) if pvk_raw else None
+        ] if x], default=dp)
+        t += f"✅ *User ko dikha raha hai: ₹{best}*\n"
+    else:
+        t += f"⚠️ *Koi live stock nahi — Default price: ₹{dp or 'N/A'}*"
+
+    t += f"\n🕐 {datetime.utcnow().strftime('%H:%M')} UTC"
+
+    mk = types.InlineKeyboardMarkup()
+    mk.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=call.data))
+    mk.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"lpc_svc_{api}"))
+    bot.send_message(call.message.chat.id, t, reply_markup=mk)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("lpc_all_"))
+def cb_lpc_all(call):
+    if call.from_user.id != OWNER_ID: return
+    api = call.data.replace("lpc_all_", "")
+    bot.answer_callback_query(call.id, "⏳ Sabka price fetch ho raha hai...")
+
+    margin = get_margin()
+    usdt_rate = get_usdt_rate()
+    margin_pct = int((margin - 1) * 100)
+
+    # Get all countries for this API
+    countries_done = set()
+    results = []
+    for _, items in SERVICES.items():
+        for key, info in items.items():
+            if info['api'] == api and info['cc'] not in countries_done:
+                countries_done.add(info['cc'])
+                cc = info['cc']
+                _pc.pop(f"{cc}|{api}", None)  # force refresh
+                psp, ssp = _smspool_price(cc, api)
+                pvk, svk = _vaksms_price(cc, api)
+                dp, ds = _get_default_price(cc, api)
+                total_stock = (ssp or 0) + (svk or 0)
+                best = psp or pvk or dp
+
+                if best:
+                    stock_ic = "🟢" if total_stock > 20 else ("🟡" if total_stock > 5 else "🔴")
+                    src_icons = []
+                    if psp: src_icons.append(f"🌐₹{psp}")
+                    if pvk: src_icons.append(f"🔷₹{pvk}")
+                    if not psp and not pvk: src_icons.append(f"📋₹{dp}(def)")
+                    results.append(
+                        f"{stock_ic}{info['flag']} {info['country']}: "
+                        f"{' | '.join(src_icons)} → *₹{best}* 📦{total_stock}")
+
+    t = (f"📊 *{api.title()} — All Countries Live Price*\n"
+         f"Margin: {margin_pct}% | {datetime.utcnow().strftime('%H:%M')} UTC\n"
+         f"━━━━━━━━━━━━━━━━━━━━━━\n\n")
+    t += "\n".join(results) if results else "❌ Koi price nahi mila"
+
+    mk = types.InlineKeyboardMarkup()
+    mk.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=call.data))
+    mk.add(types.InlineKeyboardButton("🔙 Back", callback_data=f"lpc_svc_{api}"))
+    bot.send_message(call.message.chat.id, t, reply_markup=mk)
+
+@bot.callback_query_handler(func=lambda c: c.data == "lpc_back")
+def cb_lpc_back(call):
+    if call.from_user.id != OWNER_ID: return
+    bot.answer_callback_query(call.id)
+    ab_live_price_check(call.message)
+
+@bot.callback_query_handler(func=lambda c: c.data == "lpc_full_report")
+def cb_lpc_full(call):
+    if call.from_user.id != OWNER_ID: return
+    bot.answer_callback_query(call.id, "⏳ Full report ban rahi hai...")
+    _stock_report(call.message.chat.id)
 
 @bot.message_handler(func=lambda m: m.text == "💾 Export" and m.from_user.id == OWNER_ID)
 def ab_export(msg):
