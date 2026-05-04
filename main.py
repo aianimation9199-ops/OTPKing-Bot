@@ -1332,6 +1332,7 @@ _user_search_state = {}  # {OWNER_ID: True}
 
 @bot.message_handler(func=lambda m: m.text == "💰 Balance Adjust" and m.from_user.id == OWNER_ID)
 def ab_balance_adjust(msg):
+    _quick_bal_state.pop(OWNER_ID, None)  # clear any conflicting state
     bot.send_message(msg.chat.id,
         "💰 *Balance Adjust*\n\n"
         "User ka ID ya @username bhejein:\n\n"
@@ -1512,6 +1513,7 @@ def cmd_cancel_add(msg):
     m.from_user.id == OWNER_ID
     and m.text not in ADMIN_BTNS
     and not (m.text or "").startswith('/')
+    and OWNER_ID not in _quick_bal_state   # quick_bal has its own handler
     and (
         (OWNER_ID in _add_plat_state and _add_plat_state.get(OWNER_ID, {}).get("step", 0) > 0)
         or (OWNER_ID in _ch_add_state and _ch_add_state.get(OWNER_ID, {}).get("step", 0) > 0)
@@ -1519,7 +1521,6 @@ def cmd_cancel_add(msg):
         or OWNER_ID in _settings_state
         or OWNER_ID in _bal_adjust_state
         or OWNER_ID in _user_search_state
-        or OWNER_ID in _quick_bal_state
     )
 ))
 def handle_admin_text_states(msg):
@@ -1996,6 +1997,12 @@ def ab_quick_balance(msg):
 def cb_qbal_start(call):
     if call.from_user.id != OWNER_ID: return
     action = call.data.replace("qbal_start_", "")  # add / deduct / set
+    # Clear ALL other admin states to avoid conflicts
+    _bal_adjust_state.pop(OWNER_ID, None)
+    _user_search_state.pop(OWNER_ID, None)
+    _custom_add_state.pop(OWNER_ID, None)
+    _settings_state.pop(OWNER_ID, None)
+    # Set fresh quick_bal state
     _quick_bal_state[OWNER_ID] = {"step": "uid", "action": action}
     bot.answer_callback_query(call.id)
     action_text = "ADD ➕" if action == "add" else ("DEDUCT ➖" if action == "deduct" else "SET 🔄")
@@ -2013,24 +2020,33 @@ def cb_qbal_start(call):
 ))
 def handle_quick_bal_state(msg):
     txt = (msg.text or "").strip()
-    state = _quick_bal_state.get(OWNER_ID, {})
+    state = _quick_bal_state.get(OWNER_ID)
+    if not state:
+        return
 
     if state.get("step") == "uid":
-        # Find user
+        # Find user by ID or @username
         if txt.startswith('@'):
             u = find_user_by_username(txt)
         else:
-            try: u = users_col.find_one({"user_id": int(txt)})
-            except: u = None
+            try:
+                u = users_col.find_one({"user_id": int(txt)})
+            except:
+                u = None
+
         if not u:
-            bot.send_message(msg.chat.id, f"❌ User `{txt}` nahi mila. Dobara try karein ya /cancel"); return
+            bot.send_message(msg.chat.id,
+                f"❌ User `{txt}` nahi mila.\n"
+                f"Sahi ID ya @username bhejein, ya /cancel")
+            return  # Stay in uid step — don't clear state
+
+        # User found — move to amount step
         _quick_bal_state[OWNER_ID]["step"] = "amount"
         _quick_bal_state[OWNER_ID]["uid"] = u["user_id"]
         action = state["action"]
-        action_text = "ADD ➕" if action == "add" else ("DEDUCT ➖" if action == "deduct" else "SET 🔄")
-
-        # Show quick amount buttons
         uid = u["user_id"]
+
+        # Build amount buttons
         mk = types.InlineKeyboardMarkup(row_width=3)
         if action in ("add", "deduct"):
             prefix = "qadd" if action == "add" else "qded"
@@ -2047,10 +2063,12 @@ def handle_quick_bal_state(msg):
             mk.add(types.InlineKeyboardButton("✏️ Amount bhejein", callback_data=f"qset_qb_{uid}_custom"))
         mk.add(types.InlineKeyboardButton("❌ Cancel", callback_data="qbal_cancel"))
 
+        action_text = "ADD ➕" if action == "add" else ("DEDUCT ➖" if action == "deduct" else "SET 🔄")
         bot.send_message(msg.chat.id,
-            f"✅ User mila!\n"
-            f"👤 `{uid}` — {u.get('full_name','?')} @{u.get('username','N/A')}\n"
-            f"💵 Current Balance: *₹{u.get('balance',0):.0f}*\n\n"
+            f"✅ *User Mila!*\n\n"
+            f"🆔 `{uid}`\n"
+            f"📛 {u.get('full_name','?')} @{u.get('username','N/A')}\n"
+            f"💵 Balance: *₹{u.get('balance',0):.0f}*\n\n"
             f"*{action_text}* — Amount chunein 👇\n"
             f"_(Minimum: ₹100)_", reply_markup=mk)
 
@@ -2060,9 +2078,11 @@ def handle_quick_bal_state(msg):
         try:
             amount = float(txt)
         except:
-            bot.send_message(msg.chat.id, "❌ Sirf number bhejein! (e.g. `500`)"); return
+            bot.send_message(msg.chat.id, "❌ Sirf number bhejein! (e.g. `500`)\nDobara try karein:")
+            return  # Stay in custom_amount step
         if action in ("add", "deduct") and amount < 100:
-            bot.send_message(msg.chat.id, "❌ *Minimum ₹100* chahiye!\nDobara bhejein:"); return
+            bot.send_message(msg.chat.id, "❌ *Minimum ₹100* chahiye!\nDobara bhejein:")
+            return  # Stay in custom_amount step
         _quick_bal_state.pop(OWNER_ID, None)
         _execute_quick_balance(msg.chat.id, uid, amount, action)
 
@@ -2077,18 +2097,19 @@ def cb_qbal_amount(call):
     amount_str = parts[3]
 
     if amount_str == "custom":
+        # Set state for custom amount text input
         _quick_bal_state[OWNER_ID] = {"step": "custom_amount", "action": action, "uid": uid}
         bot.answer_callback_query(call.id)
         u = users_col.find_one({"user_id": uid}) or {}
         bot.send_message(OWNER_ID,
             f"✏️ *Custom Amount*\n\n"
-            f"User `{uid}` — Balance: ₹{u.get('balance',0):.0f}\n\n"
-            f"Amount bhejein ({'Min ₹100' if action != 'set' else 'Exact amount'}):\n"
+            f"👤 User `{uid}` — Balance: ₹{u.get('balance',0):.0f}\n\n"
+            f"Amount type karein {'(Min ₹100)' if action != 'set' else '(Exact amount)'}:\n"
             f"/cancel se cancel")
         return
 
     amount = float(amount_str)
-    bot.answer_callback_query(call.id, f"⏳ Processing...")
+    bot.answer_callback_query(call.id, f"⏳ Processing ₹{amount:.0f}...")
     _quick_bal_state.pop(OWNER_ID, None)
     _execute_quick_balance(call.message.chat.id, uid, amount, action)
 
