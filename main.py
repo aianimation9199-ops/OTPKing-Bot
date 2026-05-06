@@ -38,6 +38,7 @@ SMSPOOL_KEY        = os.getenv('SMSPOOL_API_KEY', '')
 VAKSMS_KEY         = os.getenv('VAKSMS_API_KEY', '')
 DGOTP_KEY          = os.getenv('DGOTP_API_KEY', '')   # dgotp.in — sms-activate style API
 DGOTP_BASE         = "https://dgotp.in/stubs/handler_api.php"
+DGOTP_MARGIN       = 1.10   # 10% margin on dgotp prices (fixed — separate from admin margin)
 OWNER_ID           = int(os.getenv('OWNER_ID', '0'))
 SUPPORT_BOT        = os.getenv('SUPPORT_BOT', '@YourHelpBot')
 PROOF_CHANNEL_ID   = os.getenv('PROOF_CHANNEL_ID', '@ProofChannel')
@@ -357,8 +358,9 @@ def _vaksms_price(cc, api):
     return None, 0
 
 def _dgotp_price(cc, api):
-    """Returns (sell_price_inr, stock) from dgotp.in. None,0 on fail.
-    dgotp.in uses sms-activate style API with INR prices directly.
+    """Returns (sell_price_inr, stock) from dgotp.in.
+    dgotp.in prices are in INR — we add 10% margin (DGOTP_MARGIN) on top.
+    This is separate from the admin margin setting.
     """
     try:
         if not DGOTP_KEY: return None, 0
@@ -373,7 +375,7 @@ def _dgotp_price(cc, api):
         cost  = float(price_data.get("cost", 0) or price_data.get("retail_price", 0))
         count = int(price_data.get("count", 0))
         if cost > 0 and count > 0:
-            sell = math.ceil(cost * get_margin())  # dgotp prices already in INR
+            sell = math.ceil(cost * DGOTP_MARGIN)   # +10% margin, INR price
             return sell, count
     except Exception as e:
         logger.warning(f"DGOTP price [{cc}/{api}]: {e}")
@@ -868,10 +870,32 @@ def go_back(msg):
 @join_check
 def show_countries(msg):
     cat   = msg.text
+    uid   = msg.from_user.id
     items = SERVICES.get(cat, {})
-    lm    = bot.send_message(msg.chat.id, f"⏳ *{cat}* — Live prices load ho rahi hain...")
-    mk    = types.InlineKeyboardMarkup(row_width=1)
-    has   = False
+
+    # ── Check balance FIRST before loading prices ────────────────────────────
+    if uid != OWNER_ID:
+        u   = get_user(uid)
+        bal = u.get('balance', 0)
+        if bal <= 0:
+            mk = types.InlineKeyboardMarkup(row_width=1)
+            mk.add(
+                types.InlineKeyboardButton("💎 USDT Deposit (Binance TRC20)", callback_data="d_usdt"),
+                types.InlineKeyboardButton("🇮🇳 UPI Deposit",                  callback_data="d_upi"),
+            )
+            bot.send_message(msg.chat.id,
+                f"💰 *Pehle Deposit Karein!*\n\n"
+                f"🛒 Service: *{cat}*\n"
+                f"👛 Aapka Balance: *₹{bal:.0f}*\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"Number khareedne ke liye pehle wallet mein paisa daalna hoga.\n\n"
+                f"👇 Deposit method chunein:", reply_markup=mk)
+            return
+
+    # ── Load prices ──────────────────────────────────────────────────────────
+    lm  = bot.send_message(msg.chat.id, f"⏳ *{cat}* — Live prices load ho rahi hain...")
+    mk  = types.InlineKeyboardMarkup(row_width=1)
+    has = False
 
     for key, info in items.items():
         sell, stock, src, ssp, svk = best_price(info['cc'], info['api'])
@@ -1485,22 +1509,70 @@ def ab_api_bal(msg):
         f"💱 USDT Rate: ₹{rate}\n\n"
         f"ℹ️ Sirf ek mein paisa ho to bhi kaam karega ✅")
 
+_last_keys_time = {}
+
 @bot.message_handler(func=lambda m: m.text == "🔑 API Keys" and m.from_user.id == OWNER_ID)
 def ab_keys(msg):
+    # Debounce — prevent spam
+    now = time.time()
+    if now - _last_keys_time.get(OWNER_ID, 0) < 3:
+        return
+    _last_keys_time[OWNER_ID] = now
+
     results = [
         f"{'✅' if SMSPOOL_KEY else '❌'} SMSPOOL_API_KEY: {'Set ✅' if SMSPOOL_KEY else 'NOT SET ❌'}",
         f"{'✅' if VAKSMS_KEY else '❌'} VAKSMS_API_KEY: {'Set ✅' if VAKSMS_KEY else 'NOT SET ❌'}",
-        f"{'✅' if DGOTP_KEY else '⚠️'} DGOTP_API_KEY: {'Set ✅' if DGOTP_KEY else 'NOT SET (optional)'}",
+        f"{'✅' if DGOTP_KEY else '⚠️'} DGOTP_API_KEY: {'Set ✅' if DGOTP_KEY else 'NOT SET — Railway mein add karo!'}",
         f"{'✅' if BINANCE_ADDRESS else '❌'} BINANCE_ADDRESS: {'Set ✅' if BINANCE_ADDRESS else 'NOT SET ❌'}",
         f"{'✅' if UPI_ID else '⚠️'} UPI_ID: `{UPI_ID or 'Not set'}`",
         f"✅ OWNER_ID: `{OWNER_ID}`",
+        f"🟡 DGOTP Margin: {int((DGOTP_MARGIN-1)*100)}% (fixed)",
     ]
     try:
         cnt = users_col.count_documents({})
         results.append(f"✅ MongoDB: Connected ({cnt} users)")
     except Exception as e: results.append(f"❌ MongoDB: {str(e)[:40]}")
     results.append(f"📡 Force Channels: {channels_col.count_documents({'active': True})} active")
-    bot.send_message(msg.chat.id, "🔑 *Config Status*\n\n" + "\n".join(results))
+
+    mk = types.InlineKeyboardMarkup()
+    mk.add(types.InlineKeyboardButton(
+        "📖 Railway Variables Guide", callback_data="show_railway_guide"))
+
+    bot.send_message(msg.chat.id,
+        "🔑 *Config Status*\n\n" + "\n".join(results) +
+        "\n\n━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 Railway mein keys set karne ke liye 👇",
+        reply_markup=mk)
+
+@bot.callback_query_handler(func=lambda c: c.data == "show_railway_guide")
+def cb_railway_guide(call):
+    if call.from_user.id != OWNER_ID: return
+    bot.answer_callback_query(call.id)
+    bot.send_message(call.message.chat.id,
+        "🚂 *Railway Variables Setup Guide*\n\n"
+        "1️⃣ railway.app kholo\n"
+        "2️⃣ Apna project select karo\n"
+        "3️⃣ *Variables* tab click karo\n"
+        "4️⃣ *New Variable* button dabao\n"
+        "5️⃣ Yeh variables add karo:\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "`BOT_TOKEN` = Telegram bot token\n"
+        "`MONGO_URI` = MongoDB connection string\n"
+        "`OWNER_ID` = Aapka Telegram ID\n"
+        "`SMSPOOL_API_KEY` = SmsPool key\n"
+        "`VAKSMS_API_KEY` = Vak-SMS key\n"
+        "`DGOTP_API_KEY` = DgOTP.in API key\n"
+        "`BINANCE_ADDRESS` = TRC20 wallet\n"
+        "`UPI_ID` = UPI ID\n"
+        "`SUPPORT_BOT` = @YourSupportBot\n"
+        "`PROOF_CHANNEL_ID` = @ProofChannel\n"
+        "`PROOF_CHANNEL_LINK` = https://t.me/...\n"
+        "`GROUP_ID` = @YourGroup\n"
+        "`GROUP_LINK` = https://t.me/...\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "6️⃣ *Deploy* karo\n\n"
+        "🟡 *DgOTP API Key kahan milegi:*\n"
+        "dgotp.in → Login → Profile → API Key copy karo")
 
 @bot.message_handler(func=lambda m: m.text == "📡 Channels" and m.from_user.id == OWNER_ID)
 def ab_channels(msg):
@@ -1990,7 +2062,8 @@ def cb_lpc_check(call):
 
     t  = f"📊 *{flag_info} {api.title()}*\n"
     t += f"━━━━━━━━━━━━━━━━━━━━\n"
-    t += f"📈 Margin: *{margin_pct}%* | USDT: ₹{usdt_rate}\n\n"
+    t += f"📈 Admin Margin: *{margin_pct}%* | USDT: ₹{usdt_rate}\n"
+    t += f"🟡 DgOTP Margin: *{int((DGOTP_MARGIN-1)*100)}%* (fixed)\n\n"
     if psp_raw:
         sp_inr = round(psp_raw * usdt_rate, 2)
         sp_sell = math.ceil(psp_raw * usdt_rate * margin)
@@ -2002,13 +2075,35 @@ def cb_lpc_check(call):
         t += f"🔷 *Vak-SMS*\n  Raw: ₽{pvk_raw:.2f}\n  +{margin_pct}% → *₹{vk_sell}*\n  📦 Stock: {svk}\n\n"
     else:
         t += "🔷 *Vak-SMS*: ❌ No price/stock\n\n"
+
+    # DgOTP live price
+    pdg_raw = 0; sdg = 0
+    try:
+        if DGOTP_KEY:
+            co_dg = DGOTP_CC.get(cc); sv_dg = DGOTP_SVC.get(api)
+            if co_dg and sv_dg:
+                rd = requests.get(DGOTP_BASE,
+                    params={"api_key": DGOTP_KEY, "action": "getPrices",
+                            "service": sv_dg, "country": co_dg}, timeout=8).json()
+                pd_data = rd.get(sv_dg, {}).get(str(co_dg), {})
+                pdg_raw = float(pd_data.get("cost", 0)); sdg = int(pd_data.get("count", 0))
+    except: pass
+    if pdg_raw and sdg > 0:
+        dg_sell = math.ceil(pdg_raw * DGOTP_MARGIN)
+        t += f"🟡 *DgOTP*\n  Raw: ₹{pdg_raw:.2f}\n  +{int((DGOTP_MARGIN-1)*100)}% → *₹{dg_sell}*\n  📦 Stock: {sdg}\n\n"
+    else:
+        t += f"🟡 *DgOTP*: {'❌ No price/stock' if DGOTP_KEY else '⚠️ Key not set'}\n\n"
+
     if dp:
         t += f"📋 *Default*: ₹{dp} (stock: {ds})\n\n"
-    if psp_raw or pvk_raw:
-        best = min(x for x in [
-            math.ceil(psp_raw * usdt_rate * margin) if psp_raw else None,
-            math.ceil(pvk_raw * margin) if pvk_raw else None] if x)
-        t += f"✅ *User ko dikh raha hai: ₹{best}*"
+    all_prices = [x for x in [
+        math.ceil(psp_raw * usdt_rate * margin) if psp_raw else None,
+        math.ceil(pvk_raw * margin) if pvk_raw else None,
+        math.ceil(pdg_raw * DGOTP_MARGIN) if pdg_raw and sdg > 0 else None,
+    ] if x]
+    if all_prices:
+        best_p = min(all_prices)
+        t += f"✅ *User ko dikh raha hai: ₹{best_p}*"
     else:
         t += f"⚠️ *Koi live stock nahi — Default: ₹{dp or 'N/A'}*"
     t += f"\n🕐 {datetime.utcnow().strftime('%H:%M')} UTC"
