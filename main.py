@@ -1,18 +1,18 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║          OTPKING PRO v7 — FINAL PRODUCTION BUILD             ║
+║          OTPKING PRO v8 — DGOTP ONLY BUILD                   ║
 ╠══════════════════════════════════════════════════════════════╣
-║  ✅ Live Price: SmsPool + VakSMS (auto best price)           ║
+║  ✅ ONLY DgOTP.in — Primary & Only API                       ║
+║  ✅ Price = DgOTP Raw INR × 1.10 (10% margin) — User pays    ║
+║  ✅ Balance Cut = Sell price (DgOTP cost + 10%)              ║
 ║  ✅ OTP Auto-Check (30×10s = 5 min) + Auto Refund            ║
-║  ✅ Admin: Quick Balance Add/Deduct (buttons, min ₹100)       ║
-║  ✅ Admin: Live Price Checker (raw + margin dono)             ║
+║  ✅ getStatus retry with multiple response formats           ║
+║  ✅ Admin: Quick Balance Add/Deduct (buttons)                 ║
+║  ✅ Admin: Live Price Checker (DgOTP raw + sell price)       ║
 ║  ✅ Admin: Balance Log, User Search, Ban/Unban               ║
-║  ✅ Admin: Margin/USDT Rate/Cache Control                     ║
 ║  ✅ Force Channel Join Guard                                  ║
 ║  ✅ Deposit: USDT + UPI with quick-approve buttons           ║
-║  ✅ Gaali Auto-Ban                                            ║
-║  ✅ Refer & Earn Platforms                                    ║
-║  ✅ Broadcast, Export, Stock Report                           ║
+║  ✅ Gaali Auto-Ban + Broadcast + Export                       ║
 ║  ✅ 409 Conflict Fix + Auto Reconnect                         ║
 ╚══════════════════════════════════════════════════════════════╝
 """
@@ -34,11 +34,11 @@ load_dotenv()
 # ══════════════════════════════════════════════════════════════════════════════
 BOT_TOKEN          = os.getenv('BOT_TOKEN', '')
 MONGO_URI          = os.getenv('MONGO_URI') or os.getenv('MONGO_URL', '')
-SMSPOOL_KEY        = os.getenv('SMSPOOL_API_KEY', '')
-VAKSMS_KEY         = os.getenv('VAKSMS_API_KEY', '')
-DGOTP_KEY          = os.getenv('DGOTP_API_KEY', '')   # dgotp.in — sms-activate style API
+# ── ONLY DGOTP.IN — SmsPool & VakSMS removed ─────────────────────────────────
+DGOTP_KEY          = os.getenv('DGOTP_API_KEY', '')
 DGOTP_BASE         = "https://dgotp.in/stubs/handler_api.php"
-DGOTP_MARGIN       = 1.10   # 10% margin on dgotp prices (fixed — separate from admin margin)
+DGOTP_MARGIN       = 1.10   # 10% markup on DgOTP INR price — this is what user sees/pays
+# ─────────────────────────────────────────────────────────────────────────────
 OWNER_ID           = int(os.getenv('OWNER_ID', '0'))
 SUPPORT_BOT        = os.getenv('SUPPORT_BOT', '@YourHelpBot')
 PROOF_CHANNEL_ID   = os.getenv('PROOF_CHANNEL_ID', '@ProofChannel')
@@ -92,30 +92,7 @@ DEFAULT_STOCK = 50
 # ══════════════════════════════════════════════════════════════════════════════
 #  API COUNTRY / SERVICE CODES
 # ══════════════════════════════════════════════════════════════════════════════
-SMSPOOL_CC  = {
-    "russia":"RU","india":"IN","usa":"US","england":"GB","ukraine":"UA",
-    "brazil":"BR","indonesia":"ID","kenya":"KE","nigeria":"NG","pakistan":"PK",
-    "cambodia":"KH","myanmar":"MM","vietnam":"VN","philippines":"PH",
-    "bangladesh":"BD","kazakhstan":"KZ",
-}
-SMSPOOL_SVC = {
-    "whatsapp":"wa","telegram":"tg","instagram":"ig","google":"go",
-    "facebook":"fb","tiktok":"tt","twitter":"tw","snapchat":"sc",
-    "amazon":"amazon","linkedin":"li",
-}
-VAKSMS_CC   = {
-    "russia":"ru","india":"in","usa":"us","england":"gb","ukraine":"ua",
-    "brazil":"br","indonesia":"id","kenya":"ke","nigeria":"ng","pakistan":"pk",
-    "cambodia":"kh","myanmar":"mm","vietnam":"vn","philippines":"ph",
-    "bangladesh":"bd","kazakhstan":"kz",
-}
-VAKSMS_SVC  = {
-    "whatsapp":"wh","telegram":"tg","instagram":"ig","google":"go",
-    "facebook":"fb","tiktok":"tt","twitter":"tw","snapchat":"sc",
-    "amazon":"am","linkedin":"li",
-}
-
-# dgotp.in — sms-activate compatible API
+# ── DgOTP.in — sms-activate compatible API ───────────────────────────────────
 # Country codes: numeric (sms-activate standard)
 DGOTP_CC = {
     "russia":"0","india":"22","usa":"187","england":"16","ukraine":"1",
@@ -305,106 +282,92 @@ def get_margin():   return float(get_setting("margin", MARGIN_DEFAULT))
 def get_usdt_rate(): return float(get_setting("usdt_rate", USDT_RATE_DEFAULT))
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PRICE ENGINE
+#  PRICE ENGINE — DgOTP ONLY
+#  User dikhta hai: DgOTP raw INR price × 1.10 (10% margin)
+#  Balance katta hai: yahi sell price (cost + 10%)
 # ══════════════════════════════════════════════════════════════════════════════
-_pc = {}   # price cache {key: (price, stock, source, (ssp,svk), timestamp)}
+_pc = {}   # price cache {key: (price, stock, 'dgotp', timestamp)}
 
 def _get_default_price(cc, api):
-    """Fallback price — same formula as live: USD × rate × margin"""
-    margin    = get_margin()
-    usdt_rate = get_usdt_rate()
+    """Fallback static prices when DgOTP unreachable."""
     base_usd  = DEFAULT_PRICES_USD.get(api, {}).get(cc)
+    usdt_rate = get_usdt_rate()
     if base_usd:
-        return math.ceil(base_usd * usdt_rate * margin), DEFAULT_STOCK
-    return None, 0
-
-def _smspool_price(cc, api):
-    """Returns (sell_price_inr, stock) from SmsPool. None,0 on fail."""
-    try:
-        if not SMSPOOL_KEY: return None, 0
-        country = SMSPOOL_CC.get(cc); service = SMSPOOL_SVC.get(api)
-        if not country or not service: return None, 0
-        r = requests.get(
-            "https://api.smspool.net/service/price",
-            params={"key": SMSPOOL_KEY, "country": country, "service": service},
-            timeout=8).json()
-        price = float(r.get("price", 0)); stock = int(r.get("stock", 0))
-        if price > 0 and stock > 0:
-            return math.ceil(price * get_usdt_rate() * get_margin()), stock
-    except Exception as e:
-        logger.warning(f"SmsPool price [{cc}/{api}]: {e}")
-    return None, 0
-
-def _vaksms_price(cc, api):
-    """Returns (sell_price_inr, stock) from VakSMS. None,0 on fail."""
-    try:
-        if not VAKSMS_KEY: return None, 0
-        country = VAKSMS_CC.get(cc); service = VAKSMS_SVC.get(api)
-        if not country or not service: return None, 0
-        r = requests.get(
-            "https://vak-sms.com/api/getCountOperator/",
-            params={"apiKey": VAKSMS_KEY, "country": country, "service": service},
-            timeout=8).json()
-        if isinstance(r, list) and r:
-            best = None; total = 0
-            for op in r:
-                p = float(op.get("price", 0)); c = int(op.get("count", 0))
-                total += c
-                if c > 0 and (best is None or p < best): best = p
-            if best and total > 0:
-                return math.ceil(best * get_margin()), total
-    except Exception as e:
-        logger.warning(f"VakSMS price [{cc}/{api}]: {e}")
+        sell = math.ceil(base_usd * usdt_rate * DGOTP_MARGIN)
+        return sell, DEFAULT_STOCK
     return None, 0
 
 def _dgotp_price(cc, api):
-    """Returns (sell_price_inr, stock) from dgotp.in.
-    dgotp.in prices are in INR — we add 10% margin (DGOTP_MARGIN) on top.
-    This is separate from the admin margin setting.
+    """
+    Returns (sell_price_inr, stock) from dgotp.in.
+    sell_price = raw_inr_cost × DGOTP_MARGIN (1.10)
+    This is what user sees AND what gets deducted from balance.
     """
     try:
         if not DGOTP_KEY: return None, 0
-        country = DGOTP_CC.get(cc); service = DGOTP_SVC.get(api)
+        country = DGOTP_CC.get(cc)
+        service = DGOTP_SVC.get(api)
         if not country or not service: return None, 0
+
         r = requests.get(DGOTP_BASE,
             params={"api_key": DGOTP_KEY, "action": "getPrices",
                     "service": service, "country": country},
-            timeout=8).json()
-        # Response: {"wa": {"22": {"cost": 15.0, "count": 50}}}
-        price_data = r.get(service, {}).get(str(country), {})
-        cost  = float(price_data.get("cost", 0) or price_data.get("retail_price", 0))
+            timeout=10).json()
+
+        # Try multiple response formats:
+        # Format 1: {service: {country: {cost: X, count: Y}}}
+        # Format 2: {service: {country: {retail_price: X, count: Y}}}
+        # Format 3: flat list
+        svc_data = r.get(service, r)
+
+        # country might be int or str
+        price_data = svc_data.get(str(country)) or svc_data.get(int(country), {})
+
+        if not price_data and isinstance(svc_data, dict):
+            # Try iterating if nested differently
+            for k, v in svc_data.items():
+                if str(k) == str(country):
+                    price_data = v
+                    break
+
+        raw_cost = float(
+            price_data.get("cost") or
+            price_data.get("retail_price") or
+            price_data.get("price") or 0
+        )
         count = int(price_data.get("count", 0))
-        if cost > 0 and count > 0:
-            sell = math.ceil(cost * DGOTP_MARGIN)   # +10% margin, INR price
+
+        if raw_cost > 0 and count > 0:
+            sell = math.ceil(raw_cost * DGOTP_MARGIN)
             return sell, count
+
+        # Fallback: try getNumbersStatus for stock check
+        r2 = requests.get(DGOTP_BASE,
+            params={"api_key": DGOTP_KEY, "action": "getNumbersStatus",
+                    "country": country, "operator": "any"},
+            timeout=8).json()
+        key2 = f"{service}_0"
+        entry = r2.get(key2, {})
+        cnt2  = int(entry.get("count", 0))
+        pr2   = float(entry.get("cost") or entry.get("price") or 0)
+        if pr2 > 0 and cnt2 > 0:
+            return math.ceil(pr2 * DGOTP_MARGIN), cnt2
+
     except Exception as e:
         logger.warning(f"DGOTP price [{cc}/{api}]: {e}")
     return None, 0
 
 def best_price(cc, api):
-    """Returns (sell_price, stock, source, sp_stock, vk_stock)
-    source: 'smspool' | 'vaksms' | 'dgotp' | 'default'
-    Picks cheapest available source with stock.
-    """
+    """Returns (sell_price, stock, source, dg_stock, 0)"""
     k = f"{cc}|{api}"
     c = _pc.get(k)
-    if c and time.time() - c[4] < 600:   # 10 min cache
-        return c[0], c[1], c[2], c[3][0], c[3][1]
+    if c and time.time() - c[3] < 600:   # 10 min cache
+        return c[0], c[1], 'dgotp', c[1], 0
 
-    psp, ssp = _smspool_price(cc, api)
-    pvk, svk = _vaksms_price(cc, api)
     pdg, sdg = _dgotp_price(cc, api)
-
-    candidates = []
-    if psp and ssp > 0: candidates.append((psp, ssp, 'smspool'))
-    if pvk and svk > 0: candidates.append((pvk, svk, 'vaksms'))
-    if pdg and sdg > 0: candidates.append((pdg, sdg, 'dgotp'))
-
-    if candidates:
-        best_c    = min(candidates, key=lambda x: x[0])
-        total_stk = sum(c[1] for c in candidates)
-        _pc[k] = (best_c[0], total_stk, best_c[2], (ssp or 0, svk or 0), time.time())
-        return best_c[0], total_stk, best_c[2], ssp or 0, svk or 0
+    if pdg and sdg > 0:
+        _pc[k] = (pdg, sdg, 'dgotp', time.time())
+        return pdg, sdg, 'dgotp', sdg, 0
 
     dp, ds = _get_default_price(cc, api)
     if dp:
@@ -412,121 +375,122 @@ def best_price(cc, api):
     return None, 0, None, 0, 0
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  BUY ENGINE — tries cheapest API first, falls back automatically
+#  BUY ENGINE — DgOTP ONLY
 # ══════════════════════════════════════════════════════════════════════════════
 def smart_buy(cc, api):
-    """Try all APIs by price (cheapest first). Returns (order_id, number, source)."""
-    psp, ssp = _smspool_price(cc, api)
-    pvk, svk = _vaksms_price(cc, api)
-    pdg, sdg = _dgotp_price(cc, api)
-
-    sources = []
-    if psp and ssp > 0: sources.append((psp, 'smspool'))
-    if pvk and svk > 0: sources.append((pvk, 'vaksms'))
-    if pdg and sdg > 0: sources.append((pdg, 'dgotp'))
-    sources.sort(key=lambda x: x[0])  # cheapest first
-
-    for _, src in sources:
-        if src == 'smspool':
-            oid, num = _smspool_buy(cc, api)
-            if oid and num: return oid, num, 'smspool'
-        elif src == 'vaksms':
-            oid, num = _vaksms_buy(cc, api)
-            if oid and num: return oid, num, 'vaksms'
-        elif src == 'dgotp':
-            oid, num = _dgotp_buy(cc, api)
-            if oid and num: return oid, num, 'dgotp'
+    """Buy from DgOTP. Returns (order_id, number, 'dgotp') or (None, None, None)."""
+    oid, num = _dgotp_buy(cc, api)
+    if oid and num:
+        return oid, num, 'dgotp'
     return None, None, None
 
-def _smspool_buy(cc, api):
-    try:
-        country = SMSPOOL_CC.get(cc); service = SMSPOOL_SVC.get(api)
-        if not country or not service: return None, None
-        r = requests.get("https://api.smspool.net/sms/buy",
-            params={"key": SMSPOOL_KEY, "country": country, "service": service},
-            timeout=15).json()
-        if r.get("success") and r.get("number"):
-            return r["orderid"], r["number"]
-    except Exception as e: logger.error(f"SmsPool buy: {e}")
-    return None, None
-
-def _vaksms_buy(cc, api):
-    try:
-        country = VAKSMS_CC.get(cc); service = VAKSMS_SVC.get(api)
-        if not country or not service: return None, None
-        r = requests.get("https://vak-sms.com/api/getNum/",
-            params={"apiKey": VAKSMS_KEY, "country": country, "service": service},
-            timeout=15).json()
-        if r.get("tel") and r.get("idNum"):
-            return r["idNum"], r["tel"]
-    except Exception as e: logger.error(f"VakSMS buy: {e}")
-    return None, None
-
 def _dgotp_buy(cc, api):
-    """Buy number from dgotp.in — sms-activate compatible handler_api.php"""
+    """
+    Buy number from dgotp.in — sms-activate compatible handler_api.php
+    Response: "ACCESS_NUMBER:ID:NUMBER" on success
+    """
     try:
-        country = DGOTP_CC.get(cc); service = DGOTP_SVC.get(api)
-        if not country or not service: return None, None
+        country = DGOTP_CC.get(cc)
+        service = DGOTP_SVC.get(api)
+        if not country or not service:
+            logger.error(f"DGOTP buy: no mapping for cc={cc} api={api}")
+            return None, None
+
+        logger.info(f"DGOTP buy request: country={country} service={service}")
         r = requests.get(DGOTP_BASE,
             params={"api_key": DGOTP_KEY, "action": "getNumber",
-                    "service": service, "country": country},
-            timeout=15).text.strip()
-        # Response: "ACCESS_NUMBER:ID:NUMBER" or "NO_NUMBERS" etc
+                    "service": service, "country": country,
+                    "operator": "any"},
+            timeout=20).text.strip()
+
+        logger.info(f"DGOTP buy response: {r}")
+
         if r.startswith("ACCESS_NUMBER:"):
             parts = r.split(":")
             if len(parts) >= 3:
-                oid = parts[1]; num = parts[2]
-                # Send setStatus=1 (ready to receive SMS)
+                oid = parts[1].strip()
+                num = parts[2].strip()
+                # Inform DgOTP that SMS has been sent (status=1)
                 try:
                     requests.get(DGOTP_BASE,
                         params={"api_key": DGOTP_KEY, "action": "setStatus",
                                 "status": "1", "id": oid}, timeout=8)
                 except: pass
                 return oid, num
-        logger.warning(f"DGOTP buy response [{cc}/{api}]: {r}")
-    except Exception as e: logger.error(f"DGOTP buy: {e}")
+
+        # Log non-success responses for debugging
+        if r == "NO_NUMBERS":
+            logger.warning(f"DGOTP: NO_NUMBERS for {cc}/{api}")
+        elif r == "NO_BALANCE":
+            logger.error(f"DGOTP: NO_BALANCE — recharge karein!")
+            try:
+                bot.send_message(OWNER_ID,
+                    f"🚨 *DGOTP Balance Khatam!*\n\nAccount recharge karein turant!\n"
+                    f"Service: {api} | Country: {cc}")
+            except: pass
+        elif r == "BAD_KEY":
+            logger.error("DGOTP: BAD_KEY — API key galat hai!")
+        else:
+            logger.warning(f"DGOTP buy unexpected response: {r}")
+
+    except requests.Timeout:
+        logger.error(f"DGOTP buy TIMEOUT: {cc}/{api}")
+    except Exception as e:
+        logger.error(f"DGOTP buy exception: {e}")
     return None, None
 
 def check_otp(oid, source):
-    """Check OTP from the API that issued the number."""
+    """
+    Check OTP from DgOTP.
+    Possible responses:
+    - "STATUS_WAIT_CODE"      → waiting, no OTP yet
+    - "STATUS_OK:CODE"        → OTP received
+    - "STATUS_CANCEL"         → cancelled
+    - "STATUS_WAIT_RETRY"     → waiting for another SMS
+    """
+    if source != 'dgotp':
+        logger.warning(f"check_otp called with source={source}, expected dgotp")
+        return None
     try:
-        if source == 'smspool':
-            r = requests.get("https://api.smspool.net/sms/check",
-                params={"key": SMSPOOL_KEY, "orderid": oid}, timeout=10).json()
-            if r.get("sms"): return r["sms"]
-        elif source == 'vaksms':
-            r = requests.get("https://vak-sms.com/api/getSmsCode/",
-                params={"apiKey": VAKSMS_KEY, "idNum": oid}, timeout=10).json()
-            if r.get("smsCode"): return r["smsCode"]
-        elif source == 'dgotp':
-            r = requests.get(DGOTP_BASE,
-                params={"api_key": DGOTP_KEY, "action": "getStatus", "id": oid},
-                timeout=10).text.strip()
-            # Response: "STATUS_OK:CODE" or "STATUS_WAIT_CODE" or "STATUS_CANCEL"
-            if r.startswith("STATUS_OK:"):
-                return r.split(":", 1)[1]
-            elif ":" in r and r.split(":")[0] not in ("STATUS_WAIT_CODE","STATUS_CANCEL","STATUS_WAIT_RETRY"):
-                # Some providers return just the code
-                code = r.split(":")[-1]
-                if code.isdigit() and len(code) >= 4: return code
-    except Exception as e: logger.error(f"OTP check [{source}]: {e}")
+        r = requests.get(DGOTP_BASE,
+            params={"api_key": DGOTP_KEY, "action": "getStatus", "id": oid},
+            timeout=12).text.strip()
+
+        logger.debug(f"DGOTP getStatus [{oid}]: {r}")
+
+        if r.startswith("STATUS_OK:"):
+            code = r.split(":", 1)[1].strip()
+            if code:
+                return code
+
+        # Some providers send just digits as code
+        if r.isdigit() and len(r) >= 4:
+            return r
+
+        # Some send "STATUS_OK" without colon then code on next poll
+        # Some send "6:CODE" format
+        if ":" in r:
+            parts = r.split(":")
+            last = parts[-1].strip()
+            if last.isdigit() and len(last) >= 4:
+                return last
+
+    except requests.Timeout:
+        logger.warning(f"DGOTP getStatus TIMEOUT order {oid}")
+    except Exception as e:
+        logger.error(f"DGOTP OTP check [{oid}]: {e}")
     return None
 
 def cancel_order_api(oid, source):
-    """Cancel/release number on the API to get balance back."""
+    """Cancel/release number — status 8 = cancel on dgotp."""
     try:
-        if source == 'smspool':
-            requests.get("https://api.smspool.net/sms/cancel",
-                params={"key": SMSPOOL_KEY, "orderid": oid}, timeout=10)
-        elif source == 'vaksms':
-            requests.get("https://vak-sms.com/api/setStatus/",
-                params={"apiKey": VAKSMS_KEY, "idNum": oid, "status": "end"}, timeout=10)
-        elif source == 'dgotp':
-            requests.get(DGOTP_BASE,
+        if source == 'dgotp':
+            r = requests.get(DGOTP_BASE,
                 params={"api_key": DGOTP_KEY, "action": "setStatus",
-                        "status": "8", "id": oid}, timeout=10)  # 8 = cancel
-        logger.info(f"Order {oid} cancelled on {source}")
-    except Exception as e: logger.warning(f"Cancel {oid} [{source}]: {e}")
+                        "status": "8", "id": oid}, timeout=10).text.strip()
+            logger.info(f"DGOTP cancel [{oid}]: {r}")
+    except Exception as e:
+        logger.warning(f"Cancel {oid} [{source}]: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  OTP WAIT — Auto check every 10s for 5 min, then auto refund
@@ -623,7 +587,7 @@ def _post_proof(uid, num, svc, cat, amt, otp, source):
     u = users_col.find_one({"user_id": uid}) or {}
     name   = u.get('full_name') or f"User{str(uid)[-4:]}"
     masked = num[:4] + "****" + num[-2:] if len(num) > 6 else num
-    src_n  = "SmsPool" if source == 'smspool' else "Vak-SMS"
+    src_n  = {"dgotp": "DgOTP.in", "smspool": "SmsPool", "vaksms": "Vak-SMS"}.get(source, "DgOTP.in")
     text   = (f"✅ *OTP Delivered!*\n\n📞 `{masked}`\n"
               f"📍 {svc['flag']} {svc['country']} | {cat}\n"
               f"💵 ₹{amt:.0f} | 🔗 {src_n}\n"
@@ -1478,36 +1442,25 @@ def ab_pending(msg):
 @bot.message_handler(func=lambda m: m.text == "💹 API Balances" and m.from_user.id == OWNER_ID)
 def ab_api_bal(msg):
     results = []
+    # DgOTP balance
     try:
-        r   = requests.get(f"https://api.smspool.net/request/balance?key={SMSPOOL_KEY}", timeout=8).json()
-        bal = r.get('balance','?')
-        w   = " ⚠️ RECHARGE!" if float(str(bal).replace('$','').strip() or 0) < 1 else ""
-        results.append(f"{'✅' if not w else '❌'} SmsPool: ${bal}{w}")
-    except Exception as e: results.append(f"❌ SmsPool: {str(e)[:30]}")
-    try:
-        r   = requests.get(f"https://vak-sms.com/api/getBalance/?apiKey={VAKSMS_KEY}", timeout=8).json()
-        bal = r.get('balance','?')
-        w   = " ⚠️ RECHARGE!" if float(str(bal).strip() or 0) < 1 else ""
-        results.append(f"{'✅' if not w else '❌'} Vak-SMS: ₽{bal}{w}")
-    except Exception as e: results.append(f"❌ Vak-SMS: {str(e)[:30]}")
-    try:
-        r   = requests.get(DGOTP_BASE,
-            params={"api_key": DGOTP_KEY, "action": "getBalance"}, timeout=8).text.strip()
-        # Response: "ACCESS_BALANCE:100.5"
+        r = requests.get(DGOTP_BASE,
+            params={"api_key": DGOTP_KEY, "action": "getBalance"}, timeout=10).text.strip()
         if r.startswith("ACCESS_BALANCE:"):
-            bal = r.split(":")[1]
-            w   = " ⚠️ RECHARGE!" if float(bal or 0) < 1 else ""
-            results.append(f"{'✅' if not w else '❌'} DgOTP: ₹{bal}{w}")
+            bal = float(r.split(":")[1])
+            w   = " ⚠️ RECHARGE KARO!" if bal < 50 else (" ⚠️ Low" if bal < 200 else "")
+            ic  = "✅" if bal >= 50 else "❌"
+            results.append(f"{ic} DgOTP.in: *₹{bal:.2f}*{w}")
         else:
-            results.append(f"⚠️ DgOTP: {r[:40]}")
-    except Exception as e: results.append(f"❌ DgOTP: {str(e)[:30]}")
-    margin = get_margin(); rate = get_usdt_rate()
-    warn = " ⚠️ BAHUT ZYADA! Reset karo!" if margin > 1.80 else ""
+            results.append(f"⚠️ DgOTP response: `{r[:50]}`")
+    except Exception as e:
+        results.append(f"❌ DgOTP: {str(e)[:40]}")
+
     bot.send_message(msg.chat.id,
         "💹 *API Balances*\n\n" + "\n".join(results) +
-        f"\n\n📈 Margin: {int((margin-1)*100)}%{warn}\n"
-        f"💱 USDT Rate: ₹{rate}\n\n"
-        f"ℹ️ Sirf ek mein paisa ho to bhi kaam karega ✅")
+        f"\n\n🔷 DgOTP Margin: *{int((DGOTP_MARGIN-1)*100)}%* (fixed)\n"
+        f"📊 User price = DgOTP raw × {DGOTP_MARGIN}\n\n"
+        f"ℹ️ Balance ₹50 se upar rakhen — orders fail na hon")
 
 _last_keys_time = {}
 
@@ -1520,13 +1473,12 @@ def ab_keys(msg):
     _last_keys_time[OWNER_ID] = now
 
     results = [
-        f"{'✅' if SMSPOOL_KEY else '❌'} SMSPOOL_API_KEY: {'Set ✅' if SMSPOOL_KEY else 'NOT SET ❌'}",
-        f"{'✅' if VAKSMS_KEY else '❌'} VAKSMS_API_KEY: {'Set ✅' if VAKSMS_KEY else 'NOT SET ❌'}",
-        f"{'✅' if DGOTP_KEY else '⚠️'} DGOTP_API_KEY: {'Set ✅' if DGOTP_KEY else 'NOT SET — Railway mein add karo!'}",
-        f"{'✅' if BINANCE_ADDRESS else '❌'} BINANCE_ADDRESS: {'Set ✅' if BINANCE_ADDRESS else 'NOT SET ❌'}",
+        f"{'✅' if DGOTP_KEY else '❌'} DGOTP_API_KEY: {'Set ✅' if DGOTP_KEY else 'NOT SET ❌ — Set karein Railway mein!'}",
+        f"🔷 DGOTP_BASE: `{DGOTP_BASE}`",
+        f"📈 DGOTP Margin: {int((DGOTP_MARGIN-1)*100)}% (fixed)",
+        f"{'✅' if BINANCE_ADDRESS else '⚠️'} BINANCE_ADDRESS: {'Set ✅' if BINANCE_ADDRESS else 'NOT SET'}",
         f"{'✅' if UPI_ID else '⚠️'} UPI_ID: `{UPI_ID or 'Not set'}`",
         f"✅ OWNER_ID: `{OWNER_ID}`",
-        f"🟡 DGOTP Margin: {int((DGOTP_MARGIN-1)*100)}% (fixed)",
     ]
     try:
         cnt = users_col.count_documents({})
@@ -1559,9 +1511,7 @@ def cb_railway_guide(call):
         "`BOT_TOKEN` = Telegram bot token\n"
         "`MONGO_URI` = MongoDB connection string\n"
         "`OWNER_ID` = Aapka Telegram ID\n"
-        "`SMSPOOL_API_KEY` = SmsPool key\n"
-        "`VAKSMS_API_KEY` = Vak-SMS key\n"
-        "`DGOTP_API_KEY` = DgOTP.in API key\n"
+        "`DGOTP_API_KEY` = DgOTP.in API key ⭐\n"
         "`BINANCE_ADDRESS` = TRC20 wallet\n"
         "`UPI_ID` = UPI ID\n"
         "`SUPPORT_BOT` = @YourSupportBot\n"
@@ -2018,40 +1968,28 @@ def cb_lpc_check(call):
     rest   = call.data[10:]
     api    = rest.split("_")[0]
     cc     = "_".join(rest.split("_")[1:])
-    bot.answer_callback_query(call.id, "⏳ Fetching live price...")
+    bot.answer_callback_query(call.id, "⏳ DgOTP live price fetch ho rahi hai...")
 
-    margin    = get_margin()
-    usdt_rate = get_usdt_rate()
     _pc.pop(f"{cc}|{api}", None)
 
-    psp_raw = pvk_raw = None; ssp = svk = 0
+    # DgOTP live raw price
+    pdg_raw = 0; sdg = 0
     try:
-        if SMSPOOL_KEY:
-            co = SMSPOOL_CC.get(cc); sv = SMSPOOL_SVC.get(api)
-            if co and sv:
-                r = requests.get("https://api.smspool.net/service/price",
-                    params={"key":SMSPOOL_KEY,"country":co,"service":sv}, timeout=8).json()
-                raw = float(r.get("price",0)); ssp = int(r.get("stock",0))
-                if raw > 0: psp_raw = raw
-    except Exception as e: logger.warning(f"LPC SP: {e}")
-    try:
-        if VAKSMS_KEY:
-            co = VAKSMS_CC.get(cc); sv = VAKSMS_SVC.get(api)
-            if co and sv:
-                r = requests.get("https://vak-sms.com/api/getCountOperator/",
-                    params={"apiKey":VAKSMS_KEY,"country":co,"service":sv}, timeout=8).json()
-                if isinstance(r, list) and r:
-                    best = None; total = 0
-                    for op in r:
-                        p = float(op.get("price",0)); c = int(op.get("count",0))
-                        total += c
-                        if c > 0 and (best is None or p < best): best = p
-                    svk = total
-                    if best: pvk_raw = best
-    except Exception as e: logger.warning(f"LPC VK: {e}")
-
-    dp, ds     = _get_default_price(cc, api)
-    margin_pct = int((margin-1)*100)
+        co_dg = DGOTP_CC.get(cc); sv_dg = DGOTP_SVC.get(api)
+        if co_dg and sv_dg:
+            rd = requests.get(DGOTP_BASE,
+                params={"api_key": DGOTP_KEY, "action": "getPrices",
+                        "service": sv_dg, "country": co_dg}, timeout=10).json()
+            # Try multiple formats
+            svc_data = rd.get(sv_dg, rd)
+            pd_data  = svc_data.get(str(co_dg)) or svc_data.get(int(co_dg), {})
+            if not pd_data:
+                for k, v in svc_data.items():
+                    if str(k) == str(co_dg): pd_data = v; break
+            pdg_raw = float(pd_data.get("cost") or pd_data.get("retail_price") or pd_data.get("price") or 0)
+            sdg     = int(pd_data.get("count", 0))
+    except Exception as e:
+        logger.warning(f"LPC DgOTP: {e}")
 
     flag_info = ""
     for _, items in SERVICES.items():
@@ -2062,51 +2000,29 @@ def cb_lpc_check(call):
 
     t  = f"📊 *{flag_info} {api.title()}*\n"
     t += f"━━━━━━━━━━━━━━━━━━━━\n"
-    t += f"📈 Admin Margin: *{margin_pct}%* | USDT: ₹{usdt_rate}\n"
-    t += f"🟡 DgOTP Margin: *{int((DGOTP_MARGIN-1)*100)}%* (fixed)\n\n"
-    if psp_raw:
-        sp_inr = round(psp_raw * usdt_rate, 2)
-        sp_sell = math.ceil(psp_raw * usdt_rate * margin)
-        t += f"🌐 *SmsPool*\n  Raw: ${psp_raw:.4f} = ₹{sp_inr:.2f}\n  +{margin_pct}% → *₹{sp_sell}*\n  📦 Stock: {ssp}\n\n"
-    else:
-        t += "🌐 *SmsPool*: ❌ No price/stock\n\n"
-    if pvk_raw:
-        vk_sell = math.ceil(pvk_raw * margin)
-        t += f"🔷 *Vak-SMS*\n  Raw: ₽{pvk_raw:.2f}\n  +{margin_pct}% → *₹{vk_sell}*\n  📦 Stock: {svk}\n\n"
-    else:
-        t += "🔷 *Vak-SMS*: ❌ No price/stock\n\n"
+    t += f"🔷 *DgOTP.in* — Live Price\n\n"
 
-    # DgOTP live price
-    pdg_raw = 0; sdg = 0
-    try:
-        if DGOTP_KEY:
-            co_dg = DGOTP_CC.get(cc); sv_dg = DGOTP_SVC.get(api)
-            if co_dg and sv_dg:
-                rd = requests.get(DGOTP_BASE,
-                    params={"api_key": DGOTP_KEY, "action": "getPrices",
-                            "service": sv_dg, "country": co_dg}, timeout=8).json()
-                pd_data = rd.get(sv_dg, {}).get(str(co_dg), {})
-                pdg_raw = float(pd_data.get("cost", 0)); sdg = int(pd_data.get("count", 0))
-    except: pass
-    if pdg_raw and sdg > 0:
+    if pdg_raw > 0 and sdg > 0:
         dg_sell = math.ceil(pdg_raw * DGOTP_MARGIN)
-        t += f"🟡 *DgOTP*\n  Raw: ₹{pdg_raw:.2f}\n  +{int((DGOTP_MARGIN-1)*100)}% → *₹{dg_sell}*\n  📦 Stock: {sdg}\n\n"
+        profit  = round(dg_sell - pdg_raw, 2)
+        t += f"💰 Raw Cost: *₹{pdg_raw:.2f}*\n"
+        t += f"📈 Margin: +{int((DGOTP_MARGIN-1)*100)}%\n"
+        t += f"━━━━━━━━━━━━━━━━━━━━\n"
+        t += f"🏷️ User Price: *₹{dg_sell}*\n"
+        t += f"💵 Profit per sim: *₹{profit:.2f}*\n"
+        t += f"📦 Stock: *{sdg}*\n"
+        ic = "🟢" if sdg > 20 else ("🟡" if sdg > 5 else "🔴")
+        t += f"Status: {ic}\n"
+    elif pdg_raw > 0 and sdg == 0:
+        t += f"💰 Price: ₹{pdg_raw:.2f} (sell ₹{math.ceil(pdg_raw*DGOTP_MARGIN)})\n"
+        t += "❌ *Stock khatam — No Numbers*\n"
     else:
-        t += f"🟡 *DgOTP*: {'❌ No price/stock' if DGOTP_KEY else '⚠️ Key not set'}\n\n"
-
-    if dp:
-        t += f"📋 *Default*: ₹{dp} (stock: {ds})\n\n"
-    all_prices = [x for x in [
-        math.ceil(psp_raw * usdt_rate * margin) if psp_raw else None,
-        math.ceil(pvk_raw * margin) if pvk_raw else None,
-        math.ceil(pdg_raw * DGOTP_MARGIN) if pdg_raw and sdg > 0 else None,
-    ] if x]
-    if all_prices:
-        best_p = min(all_prices)
-        t += f"✅ *User ko dikh raha hai: ₹{best_p}*"
-    else:
-        t += f"⚠️ *Koi live stock nahi — Default: ₹{dp or 'N/A'}*"
-    t += f"\n🕐 {datetime.utcnow().strftime('%H:%M')} UTC"
+        dp, ds = _get_default_price(cc, api)
+        t += f"❌ *DgOTP se live price nahi mila*\n\n"
+        if dp:
+            t += f"📋 Default fallback: ₹{dp} (stock: {ds})\n"
+        t += f"\n_DgOTP API balance check karein_"
+    t += f"\n\n🕐 {datetime.utcnow().strftime('%H:%M')} UTC"
 
     mk = types.InlineKeyboardMarkup()
     mk.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=call.data))
@@ -2117,8 +2033,7 @@ def cb_lpc_check(call):
 def cb_lpc_all(call):
     if call.from_user.id != OWNER_ID: return
     api = call.data[8:]
-    bot.answer_callback_query(call.id, "⏳ Fetching all prices...")
-    margin = get_margin(); usdt_rate = get_usdt_rate()
+    bot.answer_callback_query(call.id, "⏳ DgOTP prices fetch ho rahi hain...")
     done = set(); results = []
     for _, items in SERVICES.items():
         for _, info in items.items():
@@ -2126,20 +2041,17 @@ def cb_lpc_all(call):
                 done.add(info['cc'])
                 cc = info['cc']
                 _pc.pop(f"{cc}|{api}", None)
-                psp, ssp = _smspool_price(cc, api)
-                pvk, svk = _vaksms_price(cc, api)
+                pdg, sdg = _dgotp_price(cc, api)
                 dp, _    = _get_default_price(cc, api)
-                total    = (ssp or 0) + (svk or 0)
-                best     = psp or pvk or dp
-                if best:
-                    ic = "🟢" if total > 20 else ("🟡" if total > LOW_STOCK else "🔴")
-                    parts_r = []
-                    if psp: parts_r.append(f"🌐₹{psp}")
-                    if pvk: parts_r.append(f"🔷₹{pvk}")
-                    if not psp and not pvk: parts_r.append(f"📋₹{dp}")
-                    results.append(f"{ic}{info['flag']} {info['country']}: {' | '.join(parts_r)} → *₹{best}* 📦{total}")
-    t  = f"📊 *{api.title()} — All Countries*\nMargin: {int((margin-1)*100)}% | {datetime.utcnow().strftime('%H:%M')} UTC\n━━━━━━━━━━━━━━━━━━━━\n\n"
-    t += "\n".join(results) if results else "❌ Koi price nahi"
+                if pdg and sdg > 0:
+                    ic = "🟢" if sdg > 20 else ("🟡" if sdg > LOW_STOCK else "🔴")
+                    results.append(f"{ic}{info['flag']} {info['country']}: *₹{pdg}* 📦{sdg}")
+                elif dp:
+                    results.append(f"📋{info['flag']} {info['country']}: ₹{dp} (default)")
+    t  = f"📊 *{api.title()} — All Countries (DgOTP)*\n"
+    t += f"Margin: +{int((DGOTP_MARGIN-1)*100)}% | {datetime.utcnow().strftime('%H:%M')} UTC\n"
+    t += "━━━━━━━━━━━━━━━━━━━━\n\n"
+    t += "\n".join(results) if results else "❌ Koi live price nahi"
     mk = types.InlineKeyboardMarkup()
     mk.add(types.InlineKeyboardButton("🔄 Refresh", callback_data=call.data))
     mk.add(types.InlineKeyboardButton("🔙 Back",    callback_data=f"lpc_svc_{api}"))
@@ -2542,33 +2454,30 @@ def _stock_report(cid):
         ("WhatsApp","russia","whatsapp","🇷🇺"), ("WhatsApp","india","whatsapp","🇮🇳"),
         ("WhatsApp","usa","whatsapp","🇺🇸"),    ("WhatsApp","uk","england","🇬🇧"),
         ("WhatsApp","ukraine","ukraine","🇺🇦"),  ("WhatsApp","indonesia","indonesia","🇮🇩"),
+        ("WhatsApp","kenya","whatsapp","🇰🇪"),   ("WhatsApp","nigeria","whatsapp","🇳🇬"),
         ("Telegram","russia","telegram","🇷🇺"),  ("Telegram","india","telegram","🇮🇳"),
         ("Instagram","russia","instagram","🇷🇺"),("Instagram","india","instagram","🇮🇳"),
         ("Gmail","russia","google","🇷🇺"),       ("Gmail","india","google","🇮🇳"),
         ("Facebook","russia","facebook","🇷🇺"),  ("Facebook","india","facebook","🇮🇳"),
     ]
-    t = "📈 *Live Stock Report*\n🌐=SmsPool 🔷=VakSMS 📋=Default\n\n"
+    t = f"📈 *Live Stock Report — DgOTP.in*\n"
+    t += f"Margin: +{int((DGOTP_MARGIN-1)*100)}% | {datetime.utcnow().strftime('%H:%M')} UTC\n\n"
     for svc_name, cc_name, api, flag in checks:
         cc = cc_name
         _pc.pop(f"{cc}|{api}", None)
-        psp, ssp = _smspool_price(cc, api)
-        pvk, svk = _vaksms_price(cc, api)
+        pdg, sdg = _dgotp_price(cc, api)
         dp, ds   = _get_default_price(cc, api)
-        if (psp and ssp > 0) or (pvk and svk > 0):
-            total = (ssp or 0) + (svk or 0)
-            best  = min([x for x in [psp, pvk] if x], default=dp)
-            ic    = "🔴" if total <= LOW_STOCK else ("🟡" if total <= 20 else "🟢")
-            t += f"{ic}{flag} {cc.title()} {svc_name}: 🌐{ssp}+🔷{svk}={total} | ₹{best}\n"
+        if pdg and sdg > 0:
+            ic = "🔴" if sdg <= LOW_STOCK else ("🟡" if sdg <= 20 else "🟢")
+            t += f"{ic}{flag} {cc.title()} {svc_name}: ₹{pdg} | 📦{sdg}\n"
         elif dp:
-            t += f"📋{flag} {cc.title()} {svc_name}: No live | ₹{dp} (API recharge needed)\n"
+            t += f"📋{flag} {cc.title()} {svc_name}: No live | Fallback ₹{dp}\n"
         else:
             t += f"⚫{flag} {cc.title()} {svc_name}: No data\n"
-    margin = get_margin()
-    t += f"\n📈 Margin: {int((margin-1)*100)}% | {datetime.utcnow().strftime('%H:%M')} UTC"
     bot.send_message(cid, t)
 
 def _stock_monitor():
-    """Background: low stock alert every 30 min"""
+    """Background: low stock alert every 30 min — DgOTP only"""
     while True:
         time.sleep(1800)
         try:
@@ -2576,20 +2485,28 @@ def _stock_monitor():
             for svc_name, cc, api, flag in [
                 ("WhatsApp","russia","whatsapp","🇷🇺"),
                 ("WhatsApp","india","whatsapp","🇮🇳"),
+                ("WhatsApp","indonesia","whatsapp","🇮🇩"),
                 ("Telegram","russia","telegram","🇷🇺"),
                 ("Telegram","india","telegram","🇮🇳"),
             ]:
                 _pc.pop(f"{cc}|{api}", None)
-                psp, ssp = _smspool_price(cc, api)
-                pvk, svk = _vaksms_price(cc, api)
-                total    = (ssp or 0) + (svk or 0)
-                if total > 0 and total <= LOW_STOCK:
-                    lows.append(f"{flag}{cc.title()} {svc_name}: {total} left!")
+                pdg, sdg = _dgotp_price(cc, api)
+                if sdg > 0 and sdg <= LOW_STOCK:
+                    lows.append(f"{flag}{cc.title()} {svc_name}: {sdg} left!")
             if lows:
+                # Also get current balance
+                try:
+                    rb = requests.get(DGOTP_BASE,
+                        params={"api_key": DGOTP_KEY, "action": "getBalance"},
+                        timeout=8).text.strip()
+                    bal_txt = rb.replace("ACCESS_BALANCE:", "₹") if rb.startswith("ACCESS_BALANCE:") else rb
+                except: bal_txt = "Unknown"
                 bot.send_message(OWNER_ID,
                     "⚠️ *LOW STOCK ALERT!*\n\n" + "\n".join(lows) +
-                    "\n\n🌐 https://smspool.net\n🔷 https://vak-sms.com")
-        except Exception as e: logger.error(f"Stock monitor: {e}")
+                    f"\n\n💰 DgOTP Balance: {bal_txt}\n"
+                    f"🔗 https://dgotp.in")
+        except Exception as e:
+            logger.error(f"Stock monitor: {e}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  FALLBACK
@@ -2604,7 +2521,7 @@ def fallback(msg):
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    logger.info("👑 OtpKing Pro v7 starting...")
+    logger.info("👑 OtpKing Pro v8 — DgOTP Only — Starting...")
     Thread(target=_stock_monitor, daemon=True).start()
     retry = 0
     while True:
