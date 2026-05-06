@@ -1939,11 +1939,11 @@ def ab_live_price_check(msg):
         mk.add(types.InlineKeyboardButton(label, callback_data=f"lpc_svc_{api}"))
     mk.add(types.InlineKeyboardButton("📊 Full Stock Report", callback_data="lpc_full"))
     bot.send_message(msg.chat.id,
-        "📊 *Live Price Checker*\n\n"
+        "📊 *Live Price Checker — DgOTP*\n\n"
         "Service chunein:\n"
-        "🌐 SmsPool raw → +margin\n"
-        "🔷 VakSMS raw → +margin\n"
-        "📋 Default fallback bhi dikhega", reply_markup=mk)
+        "🔷 DgOTP raw INR price dikhega\n"
+        "+10% margin ke baad user price\n"
+        "📦 Live stock bhi dikhega", reply_markup=mk)
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("lpc_svc_"))
 def cb_lpc_service(call):
@@ -2408,33 +2408,49 @@ def handle_admin_text_states(msg):
 # ══════════════════════════════════════════════════════════════════════════════
 def _send_stats(cid):
     tu = users_col.count_documents({})
-    bu = users_col.count_documents({"banned":True})
+    bu = users_col.count_documents({"banned": True})
     to = orders_col.count_documents({})
-    do = orders_col.count_documents({"status":"done"})
-    co = orders_col.count_documents({"status":"cancelled"})
-    pd = deposits_col.count_documents({"status":"pending"})
+    do = orders_col.count_documents({"status": "done"})
+    co = orders_col.count_documents({"status": "cancelled"})
+    pd = deposits_col.count_documents({"status": "pending"})
+
+    # DgOTP revenue only
     agg = list(orders_col.aggregate([
-        {"$match":{"status":"done"}},
-        {"$group":{"_id":"$source","rev":{"$sum":"$amount"},"cnt":{"$sum":1}}}]))
-    rev_sp=rev_vk=cnt_sp=cnt_vk=0
+        {"$match": {"status": "done"}},
+        {"$group": {"_id": "$source", "rev": {"$sum": "$amount"}, "cnt": {"$sum": 1}}}
+    ]))
+    rev_dg = cnt_dg = 0
     for x in agg:
-        if x['_id']=='smspool': rev_sp=x['rev']; cnt_sp=x['cnt']
-        elif x['_id']=='vaksms': rev_vk=x['rev']; cnt_vk=x['cnt']
-    total_rev  = rev_sp+rev_vk
-    margin     = get_margin()
-    profit_est = round(total_rev*(1-1/margin), 0)
-    total_add  = sum(l.get('amount',0) for l in admin_log_col.find({"type":"add"}))
-    total_ded  = sum(l.get('amount',0) for l in admin_log_col.find({"type":"deduct"}))
+        if x['_id'] == 'dgotp':
+            rev_dg = x['rev']; cnt_dg = x['cnt']
+
+    total_rev  = rev_dg
+    profit_est = round(total_rev * (1 - 1 / DGOTP_MARGIN), 0)
+
+    total_add = sum(l.get('amount', 0) for l in admin_log_col.find({"type": "add"}))
+    total_ded = sum(l.get('amount', 0) for l in admin_log_col.find({"type": "deduct"}))
+
+    # DgOTP live balance
+    dg_bal = "?"
+    try:
+        rb = requests.get(DGOTP_BASE,
+            params={"api_key": DGOTP_KEY, "action": "getBalance"}, timeout=8).text.strip()
+        if rb.startswith("ACCESS_BALANCE:"):
+            dg_bal = f"₹{float(rb.split(':')[1]):.2f}"
+        else:
+            dg_bal = rb[:20]
+    except: dg_bal = "N/A"
+
     bot.send_message(cid,
         f"📊 *Bot Statistics*\n\n"
         f"👥 Users: `{tu}` (🚫{bu})\n"
         f"🛒 Orders: `{to}` ✅{do} ❌{co}\n"
         f"📥 Pending Dep: `{pd}`\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🌐 SmsPool: `₹{rev_sp:.0f}` ({cnt_sp} orders)\n"
-        f"🔷 Vak-SMS: `₹{rev_vk:.0f}` ({cnt_vk} orders)\n"
-        f"💰 Total Revenue: `₹{total_rev:.0f}`\n"
-        f"📈 Est. Profit ({int((margin-1)*100)}%): `₹{profit_est:.0f}`\n"
+        f"🔷 *DgOTP.in*\n"
+        f"   💰 Revenue: `₹{rev_dg:.0f}` ({cnt_dg} orders)\n"
+        f"   📈 Est. Profit (+{int((DGOTP_MARGIN-1)*100)}%): `₹{profit_est:.0f}`\n"
+        f"   💳 Live Balance: `{dg_bal}`\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"➕ Admin Added: `₹{total_add:.0f}`\n"
         f"➖ Admin Deducted: `₹{total_ded:.0f}`")
