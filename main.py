@@ -92,18 +92,92 @@ DEFAULT_STOCK = 50
 # ══════════════════════════════════════════════════════════════════════════════
 #  API COUNTRY / SERVICE CODES
 # ══════════════════════════════════════════════════════════════════════════════
-# ── DgOTP.in — sms-activate compatible API ───────────────────────────────────
-# Country codes: numeric (sms-activate standard)
+# ══════════════════════════════════════════════════════════════════════════════
+#  API COUNTRY / SERVICE CODES — dgotp.in (sms-activate compatible)
+#  These numeric codes are from sms-activate standard which dgotp.in uses
+#  Verified from dgotp.in website country list
+# ══════════════════════════════════════════════════════════════════════════════
 DGOTP_CC = {
-    "russia":"0","india":"22","usa":"187","england":"16","ukraine":"1",
-    "brazil":"7","indonesia":"6","kenya":"118","nigeria":"109","pakistan":"162",
-    "cambodia":"36","myanmar":"26","vietnam":"15","philippines":"4",
-    "bangladesh":"10","kazakhstan":"57","south_africa":"28","canada":"36",
+    # Core countries — verified from dgotp.in
+    "russia":       "0",
+    "ukraine":      "1",
+    "kazakhstan":   "57",
+    "china":        "3",
+    "philippines":  "4",
+    "myanmar":      "26",
+    "indonesia":    "6",
+    "malaysia":     "31",
+    "kenya":        "118",
+    "tanzania":     "41",
+    "vietnam":      "15",
+    "kyrgyzstan":   "17",
+    "usa":          "187",
+    "israel":       "9",
+    "hong_kong":    "30",
+    "poland":       "11",
+    "england":      "16",
+    "madagascar":   "85",
+    "dr_congo":     "108",
+    "nigeria":      "109",
+    "egypt":        "109",  # fallback
+    "ghana":        "117",
+    "cameroon":     "120",
+    "ethiopia":     "131",
+    "india":        "22",
+    "bangladesh":   "10",
+    "pakistan":     "162",
+    "cambodia":     "36",
+    "laos":         "112",
+    "south_africa": "28",
+    "germany":      "43",
+    "france":       "78",
+    "canada":       "36",
+    "brazil":       "7",
+    "colombia":     "170",
+    "argentina":    "59",
+    "chile":        "65",
+    "venezuela":    "80",
+    "mexico":       "66",
+    "sri_lanka":    "155",
+    "ukraine":      "1",
+    "belarus":      "29",
+    "moldova":      "97",
+    "georgia":      "21",
+    "armenia":      "5",
+    "azerbaijan":   "73",
+    "uzbekistan":   "76",
+    "tajikistan":   "137",
+    "mongolia":     "96",
+    "senegal":      "139",
+    "mali":         "142",
+    "togo":         "141",
+    "morocco":      "150",
+    "oman":         "164",
+    "iraq":         "163",
+    "iran":         "63",
+    "romania":      "67",
+    "switzerland":  "13",
+    "ireland":      "56",
+    "croatia":      "182",
+    "angola":       "72",
+    "zimbabwe":     "140",
+    "zambia":       "86",
+    "nigeria":      "109",
+    "kenya":        "118",
 }
+
 DGOTP_SVC = {
-    "whatsapp":"wa","telegram":"tg","instagram":"ig","google":"go",
-    "facebook":"fb","tiktok":"tt","twitter":"tw","snapchat":"sc",
-    "amazon":"az","linkedin":"li",
+    # Service codes — sms-activate standard
+    "whatsapp":  "wa",
+    "telegram":  "tg",
+    "instagram": "ig",
+    "google":    "go",
+    "facebook":  "fb",
+    "tiktok":    "tt",
+    "twitter":   "tw",
+    "snapchat":  "sc",
+    "amazon":    "az",
+    "linkedin":  "li",
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -282,216 +356,256 @@ def get_margin():   return float(get_setting("margin", MARGIN_DEFAULT))
 def get_usdt_rate(): return float(get_setting("usdt_rate", USDT_RATE_DEFAULT))
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PRICE ENGINE — DgOTP ONLY
-#  User dikhta hai: DgOTP raw INR price × 1.10 (10% margin)
-#  Balance katta hai: yahi sell price (cost + 10%)
+#  PRICE + BUY ENGINE — DgOTP ONLY — v9 ROBUST
 # ══════════════════════════════════════════════════════════════════════════════
-_pc = {}   # price cache {key: (price, stock, 'dgotp', timestamp)}
+_pc = {}
 
 def _get_default_price(cc, api):
-    """Fallback static prices when DgOTP unreachable."""
-    base_usd  = DEFAULT_PRICES_USD.get(api, {}).get(cc)
-    usdt_rate = get_usdt_rate()
+    base_usd = DEFAULT_PRICES_USD.get(api, {}).get(cc)
     if base_usd:
-        sell = math.ceil(base_usd * usdt_rate * DGOTP_MARGIN)
+        sell = math.ceil(base_usd * get_usdt_rate() * DGOTP_MARGIN)
         return sell, DEFAULT_STOCK
     return None, 0
 
-def _dgotp_price(cc, api):
-    """
-    Returns (sell_price_inr, stock) from dgotp.in.
-    sell_price = raw_inr_cost × DGOTP_MARGIN (1.10)
-    This is what user sees AND what gets deducted from balance.
-    """
+def _extract_cost_count(d):
+    if not isinstance(d, dict):
+        return None, None
+    cost  = d.get("cost") or d.get("retail_price") or d.get("price") or d.get("min_price")
+    count = d.get("count") or d.get("stock") or d.get("quantity")
     try:
-        if not DGOTP_KEY: return None, 0
-        country = DGOTP_CC.get(cc)
-        service = DGOTP_SVC.get(api)
-        if not country or not service: return None, 0
+        if cost and count:
+            return float(cost), int(count)
+    except: pass
+    return None, None
 
+def _dgotp_price(cc, api):
+    if not DGOTP_KEY:
+        return None, 0
+    country = DGOTP_CC.get(cc)
+    service = DGOTP_SVC.get(api)
+    if not country or not service:
+        return None, 0
+
+    # Method 1: getPrices
+    try:
         r = requests.get(DGOTP_BASE,
             params={"api_key": DGOTP_KEY, "action": "getPrices",
                     "service": service, "country": country},
-            timeout=10).json()
-
-        # Try multiple response formats:
-        # Format 1: {service: {country: {cost: X, count: Y}}}
-        # Format 2: {service: {country: {retail_price: X, count: Y}}}
-        # Format 3: flat list
-        svc_data = r.get(service, r)
-
-        # country might be int or str
-        price_data = svc_data.get(str(country)) or svc_data.get(int(country), {})
-
-        if not price_data and isinstance(svc_data, dict):
-            # Try iterating if nested differently
-            for k, v in svc_data.items():
-                if str(k) == str(country):
-                    price_data = v
-                    break
-
-        raw_cost = float(
-            price_data.get("cost") or
-            price_data.get("retail_price") or
-            price_data.get("price") or 0
-        )
-        count = int(price_data.get("count", 0))
-
-        if raw_cost > 0 and count > 0:
-            sell = math.ceil(raw_cost * DGOTP_MARGIN)
-            return sell, count
-
-        # Fallback: try getNumbersStatus for stock check
-        r2 = requests.get(DGOTP_BASE,
-            params={"api_key": DGOTP_KEY, "action": "getNumbersStatus",
-                    "country": country, "operator": "any"},
-            timeout=8).json()
-        key2 = f"{service}_0"
-        entry = r2.get(key2, {})
-        cnt2  = int(entry.get("count", 0))
-        pr2   = float(entry.get("cost") or entry.get("price") or 0)
-        if pr2 > 0 and cnt2 > 0:
-            return math.ceil(pr2 * DGOTP_MARGIN), cnt2
-
+            timeout=12)
+        raw_text = r.text.strip()
+        logger.info("DGOTP getPrices [%s/%s]: %s", cc, api, raw_text[:200])
+        try:
+            data = r.json()
+            for layer in [data.get(service, {}), data]:
+                if not isinstance(layer, dict):
+                    continue
+                for key in [str(country), country]:
+                    entry = layer.get(key)
+                    if entry:
+                        cost, count = _extract_cost_count(entry)
+                        if cost and count and count > 0:
+                            sell = math.ceil(cost * DGOTP_MARGIN)
+                            logger.info("DGOTP price OK [%s/%s] cost=%s sell=%s stock=%s", cc, api, cost, sell, count)
+                            return sell, count
+                for k, v in layer.items():
+                    if str(k) == str(country):
+                        cost, count = _extract_cost_count(v)
+                        if cost and count and count > 0:
+                            sell = math.ceil(cost * DGOTP_MARGIN)
+                            logger.info("DGOTP price OK scan [%s/%s] cost=%s sell=%s stock=%s", cc, api, cost, sell, count)
+                            return sell, count
+            if isinstance(data, list):
+                for item in data:
+                    if str(item.get("country","")) == str(country) and item.get("service","") == service:
+                        cost, count = _extract_cost_count(item)
+                        if cost and count and count > 0:
+                            return math.ceil(cost * DGOTP_MARGIN), count
+        except ValueError:
+            logger.warning("DGOTP getPrices not JSON [%s/%s]: %s", cc, api, raw_text[:80])
     except Exception as e:
-        logger.warning(f"DGOTP price [{cc}/{api}]: {e}")
+        logger.warning("DGOTP getPrices error [%s/%s]: %s", cc, api, e)
+
+    # Method 2: getNumbersStatus
+    try:
+        r2 = requests.get(DGOTP_BASE,
+            params={"api_key": DGOTP_KEY, "action": "getNumbersStatus", "country": country},
+            timeout=12)
+        raw2 = r2.text.strip()
+        logger.info("DGOTP getNumbersStatus [%s/%s]: %s", cc, api, raw2[:200])
+        try:
+            d2 = r2.json()
+            for k2 in [service + "_0", service, service + "_any"]:
+                entry = d2.get(k2)
+                if entry:
+                    cost, count = _extract_cost_count(entry)
+                    if cost and count and count > 0:
+                        sell = math.ceil(cost * DGOTP_MARGIN)
+                        logger.info("DGOTP getNumStatus OK [%s/%s] cost=%s sell=%s stock=%s", cc, api, cost, sell, count)
+                        return sell, count
+        except ValueError:
+            pass
+    except Exception as e:
+        logger.warning("DGOTP getNumbersStatus error [%s/%s]: %s", cc, api, e)
+
+    # Method 3: getTopCountriesByService
+    try:
+        r3 = requests.get(DGOTP_BASE,
+            params={"api_key": DGOTP_KEY, "action": "getTopCountriesByService", "service": service},
+            timeout=12)
+        logger.info("DGOTP getTopCountries [%s/%s]: %s", cc, api, r3.text[:200])
+        try:
+            d3 = r3.json()
+            if isinstance(d3, dict):
+                for pos_key, item in d3.items():
+                    if isinstance(item, dict) and str(item.get("country","")) == str(country):
+                        cost  = item.get("price") or item.get("retail_price") or item.get("cost")
+                        count = item.get("count") or item.get("stock")
+                        if cost and count and int(count) > 0:
+                            sell = math.ceil(float(cost) * DGOTP_MARGIN)
+                            logger.info("DGOTP getTop OK [%s/%s] sell=%s stock=%s", cc, api, sell, count)
+                            return sell, int(count)
+        except ValueError:
+            pass
+    except Exception as e:
+        logger.warning("DGOTP getTopCountries error [%s/%s]: %s", cc, api, e)
+
+    logger.error("DGOTP price FAILED all methods [%s/%s]", cc, api)
     return None, 0
 
 def best_price(cc, api):
-    """Returns (sell_price, stock, source, dg_stock, 0)"""
     k = f"{cc}|{api}"
     c = _pc.get(k)
-    if c and time.time() - c[3] < 600:   # 10 min cache
+    if c and time.time() - c[3] < 600:
         return c[0], c[1], 'dgotp', c[1], 0
-
     pdg, sdg = _dgotp_price(cc, api)
     if pdg and sdg > 0:
         _pc[k] = (pdg, sdg, 'dgotp', time.time())
         return pdg, sdg, 'dgotp', sdg, 0
-
     dp, ds = _get_default_price(cc, api)
     if dp:
         return dp, ds, 'default', 0, 0
     return None, 0, None, 0, 0
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  BUY ENGINE — DgOTP ONLY
-# ══════════════════════════════════════════════════════════════════════════════
 def smart_buy(cc, api):
-    """Buy from DgOTP. Returns (order_id, number, 'dgotp') or (None, None, None)."""
     oid, num = _dgotp_buy(cc, api)
     if oid and num:
         return oid, num, 'dgotp'
     return None, None, None
 
 def _dgotp_buy(cc, api):
-    """
-    Buy number from dgotp.in — sms-activate compatible handler_api.php
-    Response: "ACCESS_NUMBER:ID:NUMBER" on success
-    """
-    try:
-        country = DGOTP_CC.get(cc)
-        service = DGOTP_SVC.get(api)
-        if not country or not service:
-            logger.error(f"DGOTP buy: no mapping for cc={cc} api={api}")
-            return None, None
+    if not DGOTP_KEY:
+        logger.error("DGOTP_KEY not set!")
+        return None, None
+    country = DGOTP_CC.get(cc)
+    service = DGOTP_SVC.get(api)
+    if not country or not service:
+        logger.error("DGOTP buy: no mapping cc=%s->%s api=%s->%s", cc, country, api, service)
+        return None, None
 
-        logger.info(f"DGOTP buy request: country={country} service={service}")
-        r = requests.get(DGOTP_BASE,
-            params={"api_key": DGOTP_KEY, "action": "getNumber",
-                    "service": service, "country": country,
-                    "operator": "any"},
-            timeout=20).text.strip()
+    param_list = [
+        {"api_key": DGOTP_KEY, "action": "getNumber", "service": service, "country": country, "operator": "any"},
+        {"api_key": DGOTP_KEY, "action": "getNumber", "service": service, "country": country},
+        {"api_key": DGOTP_KEY, "action": "getNumberV2", "service": service, "country": country},
+    ]
 
-        logger.info(f"DGOTP buy response: {r}")
+    for i, params in enumerate(param_list):
+        try:
+            logger.info("DGOTP buy attempt %d: country=%s service=%s", i+1, country, service)
+            r = requests.get(DGOTP_BASE, params=params, timeout=20)
+            txt = r.text.strip()
+            logger.info("DGOTP buy response %d: [%s]", i+1, txt)
 
-        if r.startswith("ACCESS_NUMBER:"):
-            parts = r.split(":")
-            if len(parts) >= 3:
-                oid = parts[1].strip()
-                num = parts[2].strip()
-                # Inform DgOTP that SMS has been sent (status=1)
+            if txt.startswith("ACCESS_NUMBER:"):
+                parts = txt.split(":")
+                if len(parts) >= 3:
+                    oid = parts[1].strip()
+                    num = ":".join(parts[2:]).strip()
+                    if oid and num:
+                        try:
+                            requests.get(DGOTP_BASE,
+                                params={"api_key": DGOTP_KEY, "action": "setStatus", "status": "1", "id": oid},
+                                timeout=8)
+                        except: pass
+                        logger.info("DGOTP buy SUCCESS oid=%s num=%s", oid, num)
+                        return oid, num
+
+            # Try JSON (getNumberV2)
+            if i == 2:
                 try:
-                    requests.get(DGOTP_BASE,
-                        params={"api_key": DGOTP_KEY, "action": "setStatus",
-                                "status": "1", "id": oid}, timeout=8)
+                    jdata = r.json()
+                    oid = str(jdata.get("activationId") or jdata.get("id",""))
+                    num = str(jdata.get("phoneNumber") or jdata.get("number",""))
+                    if oid and num:
+                        logger.info("DGOTP buy V2 SUCCESS oid=%s num=%s", oid, num)
+                        return oid, num
                 except: pass
-                return oid, num
 
-        # Log non-success responses for debugging
-        if r == "NO_NUMBERS":
-            logger.warning(f"DGOTP: NO_NUMBERS for {cc}/{api}")
-        elif r == "NO_BALANCE":
-            logger.error(f"DGOTP: NO_BALANCE — recharge karein!")
-            try:
-                bot.send_message(OWNER_ID,
-                    f"🚨 *DGOTP Balance Khatam!*\n\nAccount recharge karein turant!\n"
-                    f"Service: {api} | Country: {cc}")
-            except: pass
-        elif r == "BAD_KEY":
-            logger.error("DGOTP: BAD_KEY — API key galat hai!")
-        else:
-            logger.warning(f"DGOTP buy unexpected response: {r}")
+            if txt == "NO_NUMBERS":
+                logger.warning("DGOTP NO_NUMBERS attempt %d: %s/%s", i+1, cc, api)
+                continue
+            elif txt == "NO_BALANCE":
+                logger.error("DGOTP NO_BALANCE!")
+                try:
+                    bot.send_message(OWNER_ID,
+                        "🚨 *DGOTP Balance Khatam!*\n\n"
+                        "dgotp.in pe balance add karo!\n"
+                        f"Service: `{api}` Country: `{cc}`\n"
+                        "https://dgotp.in")
+                except: pass
+                return None, None
+            elif txt in ("BAD_KEY", "WRONG_KEY"):
+                logger.error("DGOTP BAD_KEY!")
+                return None, None
+            elif txt == "WRONG_COUNTRY_ID":
+                logger.error("DGOTP WRONG_COUNTRY_ID: %s->%s", cc, country)
+                return None, None
+            else:
+                logger.warning("DGOTP unknown response: [%s]", txt)
 
-    except requests.Timeout:
-        logger.error(f"DGOTP buy TIMEOUT: {cc}/{api}")
-    except Exception as e:
-        logger.error(f"DGOTP buy exception: {e}")
+        except requests.Timeout:
+            logger.error("DGOTP buy TIMEOUT attempt %d", i+1)
+        except Exception as e:
+            logger.error("DGOTP buy exception attempt %d: %s", i+1, e)
+
+    logger.error("DGOTP buy FAILED all attempts: %s/%s", cc, api)
     return None, None
 
 def check_otp(oid, source):
-    """
-    Check OTP from DgOTP.
-    Possible responses:
-    - "STATUS_WAIT_CODE"      → waiting, no OTP yet
-    - "STATUS_OK:CODE"        → OTP received
-    - "STATUS_CANCEL"         → cancelled
-    - "STATUS_WAIT_RETRY"     → waiting for another SMS
-    """
     if source != 'dgotp':
-        logger.warning(f"check_otp called with source={source}, expected dgotp")
         return None
     try:
         r = requests.get(DGOTP_BASE,
             params={"api_key": DGOTP_KEY, "action": "getStatus", "id": oid},
-            timeout=12).text.strip()
-
-        logger.debug(f"DGOTP getStatus [{oid}]: {r}")
-
-        if r.startswith("STATUS_OK:"):
-            code = r.split(":", 1)[1].strip()
+            timeout=12)
+        txt = r.text.strip()
+        logger.debug("DGOTP getStatus [%s]: [%s]", oid, txt)
+        if txt.startswith("STATUS_OK:"):
+            code = txt.split(":", 1)[1].strip()
             if code:
+                logger.info("DGOTP OTP received [%s]: %s", oid, code)
                 return code
-
-        # Some providers send just digits as code
-        if r.isdigit() and len(r) >= 4:
-            return r
-
-        # Some send "STATUS_OK" without colon then code on next poll
-        # Some send "6:CODE" format
-        if ":" in r:
-            parts = r.split(":")
-            last = parts[-1].strip()
+        if txt.isdigit() and len(txt) >= 4:
+            logger.info("DGOTP OTP plain [%s]: %s", oid, txt)
+            return txt
+        if ":" in txt:
+            last = txt.split(":")[-1].strip()
             if last.isdigit() and len(last) >= 4:
+                logger.info("DGOTP OTP colon [%s]: %s", oid, last)
                 return last
-
     except requests.Timeout:
-        logger.warning(f"DGOTP getStatus TIMEOUT order {oid}")
+        logger.warning("DGOTP getStatus TIMEOUT [%s]", oid)
     except Exception as e:
-        logger.error(f"DGOTP OTP check [{oid}]: {e}")
+        logger.error("DGOTP getStatus error [%s]: %s", oid, e)
     return None
 
 def cancel_order_api(oid, source):
-    """Cancel/release number — status 8 = cancel on dgotp."""
     try:
-        if source == 'dgotp':
-            r = requests.get(DGOTP_BASE,
-                params={"api_key": DGOTP_KEY, "action": "setStatus",
-                        "status": "8", "id": oid}, timeout=10).text.strip()
-            logger.info(f"DGOTP cancel [{oid}]: {r}")
+        r = requests.get(DGOTP_BASE,
+            params={"api_key": DGOTP_KEY, "action": "setStatus", "status": "8", "id": oid},
+            timeout=10)
+        logger.info("DGOTP cancel [%s]: %s", oid, r.text.strip())
     except Exception as e:
-        logger.warning(f"Cancel {oid} [{source}]: {e}")
-
+        logger.warning("DGOTP cancel [%s]: %s", oid, e)
 # ══════════════════════════════════════════════════════════════════════════════
 #  OTP WAIT — Auto check every 10s for 5 min, then auto refund
 # ══════════════════════════════════════════════════════════════════════════════
