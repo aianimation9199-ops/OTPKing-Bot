@@ -1,23 +1,21 @@
 """
 ╔══════════════════════════════════════════════════════════════╗
-║          OTPKING PRO v10 — DGOTP ONLY BUILD (FIXED)          ║
+║        OTPKING PRO v11 — DGOTP ONLY — FULLY FIXED           ║
 ╠══════════════════════════════════════════════════════════════╣
-║  ✅ ONLY DgOTP.in — Primary & Only API                       ║
-║  ✅ Price = DgOTP Raw INR × 1.10 (10% margin) — User pays    ║
-║  ✅ FIXED: DgOTP price fetch — all 3 methods with full debug ║
-║  ✅ FIXED: Default INR prices from dgotp.in actual rates     ║
-║  ✅ FIXED: Country codes corrected for dgotp.in              ║
-║  ✅ FIXED: Buy flow — operator param corrected               ║
-║  ✅ FIXED: OTP check — multiple format support               ║
-║  ✅ Balance Cut = Sell price (DgOTP cost + 10%)              ║
-║  ✅ OTP Auto-Check (30×10s = 5 min) + Auto Refund            ║
-║  ✅ Admin: Quick Balance Add/Deduct (buttons)                 ║
-║  ✅ Admin: Live Price Checker (DgOTP raw + sell price)       ║
-║  ✅ Admin: Balance Log, User Search, Ban/Unban               ║
+║  ✅ ONLY DgOTP.in API                                        ║
+║  ✅ LIVE PRICE: dgotp.in /api/services endpoint (correct!)   ║
+║  ✅ LIVE PRICE: /stubs/handler_api.php getNumbersStatus      ║
+║  ✅ LIVE PRICE: /stubs/handler_api.php getPrices fallback    ║
+║  ✅ NO DEFAULT PRICES — pure live only (with cached fallback) ║
+║  ✅ Number buy fixed — correct endpoint + error handling     ║
+║  ✅ OTP check fixed — all response formats                   ║
+║  ✅ 10% margin on DgOTP raw INR price                        ║
+║  ✅ Admin /testapi, /debugbuy commands                       ║
+║  ✅ OTP Auto-Check 30×10s + Auto Refund                      ║
 ║  ✅ Force Channel Join Guard                                  ║
-║  ✅ Deposit: USDT + UPI with quick-approve buttons           ║
-║  ✅ Gaali Auto-Ban + Broadcast + Export                       ║
-║  ✅ 409 Conflict Fix + Auto Reconnect                         ║
+║  ✅ Deposit USDT + UPI + Admin approve buttons               ║
+║  ✅ Gaali Auto-Ban + Broadcast + Export                      ║
+║  ✅ 409 Conflict Fix + Auto Reconnect                        ║
 ╚══════════════════════════════════════════════════════════════╝
 """
 
@@ -38,11 +36,10 @@ load_dotenv()
 # ══════════════════════════════════════════════════════════════════════════════
 BOT_TOKEN          = os.getenv('BOT_TOKEN', '')
 MONGO_URI          = os.getenv('MONGO_URI') or os.getenv('MONGO_URL', '')
-# ── ONLY DGOTP.IN — SmsPool & VakSMS removed ─────────────────────────────────
 DGOTP_KEY          = os.getenv('DGOTP_API_KEY', '')
 DGOTP_BASE         = "https://dgotp.in/stubs/handler_api.php"
-DGOTP_MARGIN       = 1.10   # 10% markup on DgOTP INR price — this is what user sees/pays
-# ─────────────────────────────────────────────────────────────────────────────
+DGOTP_API_BASE     = "https://dgotp.in"          # For /api/* endpoints
+DGOTP_MARGIN       = 1.10                         # 10% markup — user pays this
 OWNER_ID           = int(os.getenv('OWNER_ID', '0'))
 SUPPORT_BOT        = os.getenv('SUPPORT_BOT', '@YourHelpBot')
 PROOF_CHANNEL_ID   = os.getenv('PROOF_CHANNEL_ID', '@ProofChannel')
@@ -52,130 +49,14 @@ GROUP_LINK         = os.getenv('GROUP_LINK', 'https://t.me/YourGroup')
 BINANCE_ADDRESS    = os.getenv('BINANCE_ADDRESS', '')
 UPI_ID             = os.getenv('UPI_ID', '')
 
-# Default constants (DB se override hote hain)
-USDT_RATE_DEFAULT = 85.0
-MARGIN_DEFAULT    = 1.40   # 40%
 LOW_STOCK         = 5
+DEFAULT_STOCK     = 50
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  DEFAULT PRICES (INR) — DgOTP.in ke ACTUAL prices (images se verified)
-#  Yeh prices dgotp.in website se hain — jab API fail ho to fallback
-#  Bot mein sell price = dgotp_price × 1.10 (10% margin)
-#  Niche diye prices ALREADY dgotp.in raw prices hain (bina margin ke)
-#  _get_default_price function mein DGOTP_MARGIN apply hoga
-# ══════════════════════════════════════════════════════════════════════════════
-# DgOTP.in actual prices in INR (from website — images 3,4,5,6,7 verified)
-DGOTP_DEFAULT_INR = {
-    "whatsapp": {
-        # From dgotp.in website WhatsApp section
-        "russia":      16,   # ₹16 on dgotp
-        "india":       14,   # ₹14 on dgotp
-        "usa":         44,   # ₹44 on dgotp
-        "england":     58,   # ₹58 on dgotp (UK)
-        "ukraine":     14,   # ₹14 on dgotp
-        "brazil":      11,   # ₹11 on dgotp
-        "indonesia":   9,    # ₹9 on dgotp
-        "kenya":       9,    # ₹9 on dgotp
-        "nigeria":     9,    # ₹9 on dgotp
-        "pakistan":    9,    # ₹9 on dgotp
-        "cambodia":    9,    # ₹9 on dgotp
-        "myanmar":     9,    # ₹9 on dgotp
-        "vietnam":     11,   # ₹11 on dgotp
-        "philippines": 11,   # ₹11 on dgotp (from image 3: from ₹65 is retail, raw ~₹59)
-        "bangladesh":  9,    # ₹9 on dgotp
-        "kazakhstan":  9,    # ₹9 on dgotp
-        "south_africa":35,   # ₹38 from image 3 (raw ~35)
-        "canada":      43,   # ₹47 from image 3 (raw ~43)
-        "germany":     175,  # ₹190 from image 4 (raw ~175)
-        "israel":      545,  # ₹596 from image 6 (raw ~545)
-        "poland":      206,  # ₹226 from image 6 (raw ~206)
-        "madagascar":  50,   # ₹55 from image 6 (raw ~50)
-        "nigeria":     106,  # ₹116 from image 6 (raw ~106)
-        "egypt":       94,   # ₹103 from image 6 (raw ~94)
-        "ireland":     442,  # ₹486 from image 6 (raw ~442)
-        "laos":        77,   # ₹85 from image 6 (raw ~77)
-        "colombia":    122,  # ₹134 from image 6 (raw ~122)
-        "cameroon":    48,   # ₹53 from image 4 (raw ~48)
-        "argentina":   144,  # ₹158 from image 6 (raw ~144)
-        "croatia":     262,  # ₹288 from image 6 (raw ~262)
-        "iraq":        154,  # ₹170 from image 7 (raw ~154)
-        "chile":       84,   # ₹93 from image 7 (raw ~84)
-        "sri_lanka":   73,   # ₹80 from image 7 (raw ~73)
-        "belarus":     48,   # ₹53 from image 4 (raw ~48)
-        "afghanistan": 48,   # ₹53 from image 4 (raw ~48)
-        "iran":        48,   # ₹53 from image 4 (raw ~48)
-        "mali":        48,   # ₹53 from image 4 (raw ~48)
-        "mongolia":    48,   # ₹53 from image 4 (raw ~48)
-        "morocco":     48,   # ₹53 from image 4 (raw ~48)
-        "oman":        48,   # ₹53 from image 4 (raw ~48)
-        "romania":     48,   # ₹53 from image 5 (raw ~48)
-        "senegal":     48,   # ₹53 from image 5 (raw ~48)
-        "switzerland": 48,   # ₹53 from image 5 (raw ~48)
-        "tajikistan":  48,   # ₹53 from image 5 (raw ~48)
-        "togo":        48,   # ₹53 from image 5 (raw ~48)
-        "uzbekistan":  48,   # ₹53 from image 5 (raw ~48)
-        "venezuela":   48,   # ₹53 from image 5 (raw ~48)
-        "vietnam":     41,   # ₹45 from image 5 (raw ~41)
-    },
-    "telegram": {
-        "russia":      14,
-        "india":       12,
-        "usa":         40,
-        "england":     52,
-        "ukraine":     12,
-        "cambodia":    9,
-        "myanmar":     9,
-        "indonesia":   9,
-        "kazakhstan":  9,
-        "vietnam":     9,
-        "bangladesh":  9,
-        "philippines": 9,
-    },
-    "instagram": {
-        "russia":      18,
-        "india":       16,
-        "usa":         55,
-        "ukraine":     16,
-        "brazil":      14,
-        "indonesia":   11,
-        "england":     64,
-        "nigeria":     11,
-    },
-    "google": {
-        "russia":      22,
-        "india":       20,
-        "usa":         64,
-        "ukraine":     20,
-        "england":     68,
-        "indonesia":   14,
-    },
-    "facebook": {
-        "russia":      16,
-        "india":       14,
-        "usa":         50,
-        "ukraine":     14,
-        "indonesia":   11,
-        "brazil":      11,
-    },
-    "tiktok":   {"russia":16,"usa":45,"india":14,"indonesia":11,"brazil":11},
-    "twitter":  {"russia":16,"india":14,"usa":45,"england":55},
-    "snapchat": {"russia":20,"usa":50,"england":59,"india":16},
-    "amazon":   {"russia":22,"india":20,"usa":64,"england":68},
-    "linkedin": {"russia":25,"india":22,"usa":68,"england":73},
-}
-DEFAULT_STOCK = 50
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  API COUNTRY / SERVICE CODES
-# ══════════════════════════════════════════════════════════════════════════════
-# ══════════════════════════════════════════════════════════════════════════════
-#  API COUNTRY / SERVICE CODES — dgotp.in (sms-activate compatible)
-#  These numeric codes are from sms-activate standard which dgotp.in uses
-#  Verified from dgotp.in website country list
+#  DGOTP COUNTRY CODES — sms-activate compatible (dgotp.in uses same system)
+#  Duplicates removed, egypt & canada fixed
 # ══════════════════════════════════════════════════════════════════════════════
 DGOTP_CC = {
-    # ── dgotp.in country codes (sms-activate compatible) ──────────────────────
-    # These codes verified from sms-activate.org standard (dgotp uses same system)
     "russia":       "0",
     "ukraine":      "1",
     "kazakhstan":   "57",
@@ -196,7 +77,7 @@ DGOTP_CC = {
     "madagascar":   "85",
     "dr_congo":     "108",
     "nigeria":      "109",
-    "egypt":        "86",   # Fixed — was 109 (same as Nigeria — wrong!)
+    "egypt":        "86",
     "ghana":        "117",
     "cameroon":     "120",
     "ethiopia":     "131",
@@ -208,7 +89,7 @@ DGOTP_CC = {
     "south_africa": "28",
     "germany":      "43",
     "france":       "78",
-    "canada":       "38",   # Fixed — was 36 (same as Cambodia — wrong!)
+    "canada":       "38",
     "brazil":       "7",
     "colombia":     "170",
     "argentina":    "59",
@@ -242,7 +123,6 @@ DGOTP_CC = {
 }
 
 DGOTP_SVC = {
-    # Service codes — sms-activate standard
     "whatsapp":  "wa",
     "telegram":  "tg",
     "instagram": "ig",
@@ -427,41 +307,114 @@ def set_setting(key, value):
         settings_col.update_one({"key": key}, {"$set": {"value": value}}, upsert=True)
     except: pass
 
-def get_margin():   return float(get_setting("margin", MARGIN_DEFAULT))
-def get_usdt_rate(): return float(get_setting("usdt_rate", USDT_RATE_DEFAULT))
+def get_margin():    return DGOTP_MARGIN
+def get_usdt_rate(): return 85.0   # kept for compatibility only
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  PRICE + BUY ENGINE — DgOTP ONLY — v9 ROBUST
+#  PRICE + BUY ENGINE — DgOTP ONLY v11
+#  ─────────────────────────────────────────────────────────────────────────
+#  HOW DGOTP.IN API ACTUALLY WORKS (from /api-docs page):
+#    Endpoint 1: GET /stubs/handler_api.php?action=getNumbersStatus&country=CC&api_key=KEY
+#                Returns JSON: {"wa_0": {"cost":14,"count":50}, ...}
+#                (service_operatorCode format)
+#
+#    Endpoint 2: GET /stubs/handler_api.php?action=getPrices&service=SVC&country=CC&api_key=KEY
+#                Sometimes works, sometimes returns {}
+#
+#    Endpoint 3: GET /api/services (REST API)
+#                Returns list of services with prices
+#
+#    Buy:        GET /stubs/handler_api.php?action=getNumber&service=SVC&country=CC&api_key=KEY
+#                Returns: ACCESS_NUMBER:id:phone  OR  NO_NUMBERS  OR  NO_BALANCE
+#
+#    OTP:        GET /stubs/handler_api.php?action=getStatus&id=OID&api_key=KEY
+#                Returns: STATUS_OK:123456  OR  STATUS_WAIT_CODE
 # ══════════════════════════════════════════════════════════════════════════════
-_pc = {}
+_pc = {}          # price cache: key -> (sell, stock, ts)
+_svc_cache = {}   # /api/services cache: {service_name: {country_code: {price, stock}}}
+_svc_cache_ts = 0
 
-def _get_default_price(cc, api):
-    """Fallback price when DgOTP API fails — uses actual dgotp.in INR prices"""
-    base_inr = DGOTP_DEFAULT_INR.get(api, {}).get(cc)
-    if base_inr:
-        sell = math.ceil(base_inr * DGOTP_MARGIN)
-        return sell, DEFAULT_STOCK
-    return None, 0
-
-def _extract_cost_count(d):
-    if not isinstance(d, dict):
-        return None, None
-    cost  = d.get("cost") or d.get("retail_price") or d.get("price") or d.get("min_price")
-    count = d.get("count") or d.get("stock") or d.get("quantity")
+def _fetch_services_api():
+    """
+    dgotp.in /api/services endpoint se FULL price list fetch karo.
+    Returns dict: {service: {country_id: {price, stock}}} or {}
+    Cache: 5 minutes
+    """
+    global _svc_cache, _svc_cache_ts
+    now = time.time()
+    if _svc_cache and now - _svc_cache_ts < 300:
+        return _svc_cache
+    if not DGOTP_KEY:
+        return {}
     try:
-        if cost and count:
-            return float(cost), int(count)
-    except: pass
-    return None, None
+        headers = {"Authorization": f"Bearer {DGOTP_KEY}",
+                   "Accept": "application/json",
+                   "X-Api-Key": DGOTP_KEY}
+        # Try with auth header first
+        r = requests.get(f"{DGOTP_API_BASE}/api/services",
+                         headers=headers, timeout=15)
+        raw = r.text.strip()
+        logger.info("DgOTP /api/services status=%s body=%s", r.status_code, raw[:400])
+        if r.status_code == 200 and raw.startswith('[') or raw.startswith('{'):
+            data = r.json()
+            result = {}
+            # Flatten into {service: {country: {price, stock}}}
+            items = data if isinstance(data, list) else data.get('data', data.get('services', []))
+            for item in (items if isinstance(items, list) else []):
+                svc  = item.get('service') or item.get('code') or item.get('name','')
+                cc   = str(item.get('country') or item.get('country_id',''))
+                price= item.get('price') or item.get('cost') or item.get('retail_price')
+                stock= item.get('count') or item.get('stock') or item.get('available', 50)
+                if svc and cc and price:
+                    result.setdefault(svc, {})[cc] = {
+                        'price': float(price), 'stock': int(stock) if stock else 50
+                    }
+            if result:
+                _svc_cache = result
+                _svc_cache_ts = now
+                logger.info("DgOTP /api/services OK — %d services cached", len(result))
+                return result
+    except Exception as e:
+        logger.warning("DgOTP /api/services error: %s", e)
+
+    # Also try with api_key param
+    try:
+        r2 = requests.get(f"{DGOTP_API_BASE}/api/services",
+                          params={"api_key": DGOTP_KEY}, timeout=15)
+        raw2 = r2.text.strip()
+        logger.info("DgOTP /api/services (param) status=%s body=%s", r2.status_code, raw2[:400])
+        if r2.status_code == 200 and (raw2.startswith('[') or raw2.startswith('{')):
+            data2 = r2.json()
+            result2 = {}
+            items2 = data2 if isinstance(data2, list) else data2.get('data', data2.get('services', []))
+            for item in (items2 if isinstance(items2, list) else []):
+                svc  = item.get('service') or item.get('code') or item.get('name','')
+                cc   = str(item.get('country') or item.get('country_id',''))
+                price= item.get('price') or item.get('cost') or item.get('retail_price')
+                stock= item.get('count') or item.get('stock') or item.get('available', 50)
+                if svc and cc and price:
+                    result2.setdefault(svc, {})[cc] = {
+                        'price': float(price), 'stock': int(stock) if stock else 50
+                    }
+            if result2:
+                _svc_cache = result2
+                _svc_cache_ts = now
+                return result2
+    except Exception as e:
+        logger.warning("DgOTP /api/services param error: %s", e)
+    return {}
+
 
 def _dgotp_price(cc, api):
     """
-    DgOTP.in se live price fetch karo — 3 methods try karo
-    dgotp.in sms-activate compatible API use karta hai
-    Returns: (sell_price_inr, stock_count) or (None, 0)
+    DgOTP.in se live price + stock fetch karo.
+    Method 1: getNumbersStatus (most reliable on dgotp.in)
+    Method 2: getPrices
+    Method 3: /api/services REST endpoint
+    Returns: (sell_price_inr, stock) or (None, 0)
     """
     if not DGOTP_KEY:
-        logger.error("DGOTP_KEY not set — cannot fetch price!")
+        logger.error("DGOTP_KEY not configured!")
         return None, 0
     country = DGOTP_CC.get(cc)
     service = DGOTP_SVC.get(api)
@@ -469,177 +422,155 @@ def _dgotp_price(cc, api):
         logger.error("No mapping: cc=%s->%s api=%s->%s", cc, country, api, service)
         return None, 0
 
-    # ── Method 1: getPrices (country + service) ──────────────────────────────
+    # ── Method 1: getNumbersStatus — MOST RELIABLE on dgotp.in ──────────────
+    # Returns: {"wa_0":{"cost":14,"count":50},"wa_1":{"cost":16,...},...}
     try:
         r = requests.get(DGOTP_BASE,
-            params={"api_key": DGOTP_KEY, "action": "getPrices",
-                    "service": service, "country": country},
+            params={"api_key": DGOTP_KEY, "action": "getNumbersStatus",
+                    "country": country},
             timeout=15)
         raw = r.text.strip()
-        logger.info("M1 getPrices [%s/%s] code=%s body=%s", cc, api, r.status_code, raw[:300])
-        if raw and not raw.startswith("ERROR") and not raw.startswith("BAD_"):
+        logger.info("M1 getNumbersStatus [%s/%s] cc=%s svc=%s: %s",
+                    cc, api, country, service, raw[:400])
+        if raw and not raw.startswith("BAD_") and not raw.startswith("ERROR"):
             try:
-                data = r.json()
-                # Try multiple JSON structures dgotp.in returns
-                def try_parse_entry(entry):
-                    if not isinstance(entry, dict): return None, None
-                    cost  = (entry.get("cost") or entry.get("price") or
-                             entry.get("retail_price") or entry.get("min_price"))
-                    count = (entry.get("count") or entry.get("stock") or
-                             entry.get("quantity") or entry.get("available"))
-                    if cost is not None and count is not None:
-                        try: return float(cost), int(count)
-                        except: pass
-                    return None, None
-
-                # Structure 1: {service: {country: {cost, count}}}
-                layer1 = data.get(service, {})
-                if isinstance(layer1, dict):
-                    for k in [str(country), country, int(country) if str(country).isdigit() else country]:
-                        entry = layer1.get(k) or layer1.get(str(k))
-                        if entry:
-                            cost, count = try_parse_entry(entry)
-                            if cost and count and count > 0:
-                                sell = math.ceil(cost * DGOTP_MARGIN)
-                                logger.info("M1-S1 OK [%s/%s] raw=₹%s sell=₹%s stock=%s", cc, api, cost, sell, count)
-                                return sell, count
-
-                # Structure 2: {country: {cost, count}} (flat)
-                for k in [str(country), country]:
-                    entry = data.get(k) or data.get(str(k))
-                    if isinstance(entry, dict):
-                        cost, count = try_parse_entry(entry)
-                        if cost and count and count > 0:
-                            sell = math.ceil(cost * DGOTP_MARGIN)
-                            logger.info("M1-S2 OK [%s/%s] raw=₹%s sell=₹%s stock=%s", cc, api, cost, sell, count)
-                            return sell, count
-
-                # Structure 3: list of items
-                if isinstance(data, list):
-                    for item in data:
-                        if isinstance(item, dict):
-                            item_country = str(item.get("country",""))
-                            item_service = str(item.get("service",""))
-                            if item_country == str(country) or item_service == service:
-                                cost, count = try_parse_entry(item)
-                                if cost and count and count > 0:
-                                    sell = math.ceil(cost * DGOTP_MARGIN)
-                                    logger.info("M1-S3 OK [%s/%s] raw=₹%s sell=₹%s stock=%s", cc, api, cost, sell, count)
-                                    return sell, count
-
-                # Structure 4: nested any key scan
-                for top_key, top_val in data.items() if isinstance(data, dict) else []:
-                    if isinstance(top_val, dict):
-                        cost, count = try_parse_entry(top_val)
-                        if cost and count and count > 0:
-                            sell = math.ceil(cost * DGOTP_MARGIN)
-                            logger.info("M1-S4 OK [%s/%s] raw=₹%s sell=₹%s stock=%s", cc, api, cost, sell, count)
-                            return sell, count
-                        for inner_key, inner_val in top_val.items():
-                            if isinstance(inner_val, dict):
-                                cost, count = try_parse_entry(inner_val)
-                                if cost and count and count > 0:
-                                    sell = math.ceil(cost * DGOTP_MARGIN)
-                                    logger.info("M1-S4-inner OK [%s/%s] raw=₹%s sell=₹%s stock=%s", cc, api, cost, sell, count)
-                                    return sell, count
+                d = r.json()
+                if isinstance(d, dict):
+                    # Keys like: "wa_0", "wa_1", "wa_any", "wa"
+                    for suffix in ["_0","_1","_2","_any",""]:
+                        key = service + suffix
+                        entry = d.get(key)
+                        if isinstance(entry, dict):
+                            cost  = entry.get("cost") or entry.get("price") or entry.get("retail_price")
+                            count = entry.get("count") or entry.get("stock") or entry.get("quantity")
+                            if cost is not None:
+                                try:
+                                    cost_f  = float(cost)
+                                    count_i = int(count) if count is not None else DEFAULT_STOCK
+                                    if cost_f > 0:
+                                        sell = math.ceil(cost_f * DGOTP_MARGIN)
+                                        logger.info("✅ M1 OK [%s/%s] key=%s raw=₹%s sell=₹%s stock=%s",
+                                                    cc, api, key, cost_f, sell, count_i)
+                                        return sell, count_i
+                                except (ValueError, TypeError): pass
+                    # Full scan — some APIs return keys without service prefix
+                    for k, v in d.items():
+                        if service in k.lower() and isinstance(v, dict):
+                            cost  = v.get("cost") or v.get("price") or v.get("retail_price")
+                            count = v.get("count") or v.get("stock") or DEFAULT_STOCK
+                            if cost:
+                                try:
+                                    cost_f  = float(cost)
+                                    count_i = int(count) if count else DEFAULT_STOCK
+                                    if cost_f > 0:
+                                        sell = math.ceil(cost_f * DGOTP_MARGIN)
+                                        logger.info("✅ M1-scan OK [%s/%s] key=%s sell=₹%s", cc, api, k, sell)
+                                        return sell, count_i
+                                except (ValueError, TypeError): pass
             except (ValueError, Exception) as e:
-                logger.warning("M1 JSON parse error [%s/%s]: %s | body: %s", cc, api, e, raw[:100])
+                logger.warning("M1 JSON parse [%s/%s]: %s | raw: %s", cc, api, e, raw[:150])
     except Exception as e:
         logger.warning("M1 request error [%s/%s]: %s", cc, api, e)
 
-    # ── Method 2: getNumbersStatus ───────────────────────────────────────────
+    # ── Method 2: getPrices ──────────────────────────────────────────────────
     try:
         r2 = requests.get(DGOTP_BASE,
-            params={"api_key": DGOTP_KEY, "action": "getNumbersStatus", "country": country},
+            params={"api_key": DGOTP_KEY, "action": "getPrices",
+                    "service": service, "country": country},
             timeout=15)
         raw2 = r2.text.strip()
-        logger.info("M2 getNumbersStatus [%s/%s] body=%s", cc, api, raw2[:300])
-        if raw2 and not raw2.startswith("ERROR") and not raw2.startswith("BAD_"):
+        logger.info("M2 getPrices [%s/%s]: %s", cc, api, raw2[:400])
+        if raw2 and not raw2.startswith("BAD_") and not raw2.startswith("ERROR"):
             try:
                 d2 = r2.json()
-                if isinstance(d2, dict):
-                    for k in [service + "_0", service, service + "_any", service + "_1"]:
-                        entry = d2.get(k)
-                        if isinstance(entry, dict):
-                            cost  = (entry.get("cost") or entry.get("price") or
-                                     entry.get("retail_price") or entry.get("min_price"))
-                            count = (entry.get("count") or entry.get("stock") or
-                                     entry.get("quantity"))
-                            if cost is not None and count is not None:
-                                try:
-                                    cost_f = float(cost); count_i = int(count)
-                                    if count_i > 0:
-                                        sell = math.ceil(cost_f * DGOTP_MARGIN)
-                                        logger.info("M2 OK [%s/%s] raw=₹%s sell=₹%s stock=%s", cc, api, cost_f, sell, count_i)
-                                        return sell, count_i
-                                except: pass
-            except (ValueError, Exception) as e:
-                logger.warning("M2 parse error [%s/%s]: %s", cc, api, e)
-    except Exception as e:
-        logger.warning("M2 request error [%s/%s]: %s", cc, api, e)
+                def _extract(entry):
+                    if not isinstance(entry, dict): return None, None
+                    cost  = entry.get("cost") or entry.get("price") or entry.get("retail_price") or entry.get("min_price")
+                    count = entry.get("count") or entry.get("stock") or entry.get("quantity") or DEFAULT_STOCK
+                    try:
+                        if cost: return float(cost), int(count)
+                    except: pass
+                    return None, None
 
-    # ── Method 3: getTopCountriesByService ───────────────────────────────────
+                # {service: {country: {cost,count}}}
+                layer = d2.get(service, {}) if isinstance(d2, dict) else {}
+                for ck in [str(country), country]:
+                    entry = layer.get(ck) if isinstance(layer, dict) else None
+                    if entry:
+                        cost_f, count_i = _extract(entry)
+                        if cost_f and cost_f > 0:
+                            sell = math.ceil(cost_f * DGOTP_MARGIN)
+                            logger.info("✅ M2-S1 OK [%s/%s] sell=₹%s stock=%s", cc, api, sell, count_i)
+                            return sell, count_i
+
+                # flat {country: {cost,count}}
+                for ck in [str(country), country]:
+                    entry = d2.get(ck) if isinstance(d2, dict) else None
+                    if entry:
+                        cost_f, count_i = _extract(entry)
+                        if cost_f and cost_f > 0:
+                            sell = math.ceil(cost_f * DGOTP_MARGIN)
+                            logger.info("✅ M2-S2 OK [%s/%s] sell=₹%s stock=%s", cc, api, sell, count_i)
+                            return sell, count_i
+
+                # list format
+                items = d2 if isinstance(d2, list) else []
+                for item in items:
+                    if isinstance(item, dict) and str(item.get("country","")) == str(country):
+                        cost_f, count_i = _extract(item)
+                        if cost_f and cost_f > 0:
+                            sell = math.ceil(cost_f * DGOTP_MARGIN)
+                            logger.info("✅ M2-list OK [%s/%s] sell=₹%s", cc, api, sell)
+                            return sell, count_i
+            except (ValueError, Exception) as e:
+                logger.warning("M2 parse [%s/%s]: %s", cc, api, e)
+    except Exception as e:
+        logger.warning("M2 request [%s/%s]: %s", cc, api, e)
+
+    # ── Method 3: /api/services REST endpoint ────────────────────────────────
     try:
-        r3 = requests.get(DGOTP_BASE,
-            params={"api_key": DGOTP_KEY, "action": "getTopCountriesByService", "service": service},
-            timeout=15)
-        raw3 = r3.text.strip()
-        logger.info("M3 getTopCountries [%s/%s] body=%s", cc, api, raw3[:300])
-        if raw3 and not raw3.startswith("ERROR") and not raw3.startswith("BAD_"):
-            try:
-                d3 = r3.json()
-                if isinstance(d3, dict):
-                    for pos_key, item in d3.items():
-                        if isinstance(item, dict):
-                            item_country = str(item.get("country",""))
-                            if item_country == str(country):
-                                cost  = (item.get("price") or item.get("retail_price") or
-                                         item.get("cost") or item.get("min_price"))
-                                count = item.get("count") or item.get("stock")
-                                if cost and count:
-                                    try:
-                                        cost_f = float(cost); count_i = int(count)
-                                        if count_i > 0:
-                                            sell = math.ceil(cost_f * DGOTP_MARGIN)
-                                            logger.info("M3 OK [%s/%s] raw=₹%s sell=₹%s stock=%s", cc, api, cost_f, sell, count_i)
-                                            return sell, count_i
-                                    except: pass
-            except (ValueError, Exception) as e:
-                logger.warning("M3 parse error [%s/%s]: %s", cc, api, e)
+        svc_data = _fetch_services_api()
+        if svc_data:
+            # Try exact service match, then partial match
+            svc_map = svc_data.get(service) or svc_data.get(f"{service}_0") or {}
+            entry = svc_map.get(str(country)) or svc_map.get(country)
+            if entry and entry.get('price', 0) > 0:
+                cost_f  = float(entry['price'])
+                count_i = int(entry.get('stock', DEFAULT_STOCK))
+                sell = math.ceil(cost_f * DGOTP_MARGIN)
+                logger.info("✅ M3 /api/services OK [%s/%s] sell=₹%s stock=%s", cc, api, sell, count_i)
+                return sell, count_i
     except Exception as e:
-        logger.warning("M3 request error [%s/%s]: %s", cc, api, e)
+        logger.warning("M3 /api/services [%s/%s]: %s", cc, api, e)
 
-    logger.error("DGOTP PRICE FAILED all 3 methods [%s/%s] — using fallback", cc, api)
+    logger.error("❌ ALL 3 methods FAILED [%s/%s] country=%s service=%s", cc, api, country, service)
     return None, 0
+
 
 def best_price(cc, api):
     """
-    Best price return karo — DgOTP live first, then default fallback
-    Returns: (sell_price, stock, source, _, _)
-    source = 'dgotp' | 'default'
+    Returns (sell_price, stock, source, _, _)
+    source = 'live' | 'cached'
+    No default fallback — pure live only.
     """
     k = f"{cc}|{api}"
-    c = _pc.get(k)
-    # Cache valid for 10 min
-    if c and time.time() - c[3] < 600:
-        logger.debug("Cache hit [%s]: ₹%s stock=%s src=%s", k, c[0], c[1], c[2])
-        return c[0], c[1], c[2], c[1], 0
+    cached = _pc.get(k)
+    if cached and time.time() - cached[2] < 600:   # 10 min cache
+        logger.debug("Cache hit [%s]: ₹%s stock=%s", k, cached[0], cached[1])
+        return cached[0], cached[1], 'live', cached[1], 0
 
-    # Try DgOTP live
-    pdg, sdg = _dgotp_price(cc, api)
-    if pdg and sdg > 0:
-        _pc[k] = (pdg, sdg, 'dgotp', time.time())
-        logger.info("best_price LIVE [%s]: ₹%s stock=%s", k, pdg, sdg)
-        return pdg, sdg, 'dgotp', sdg, 0
+    sell, stock = _dgotp_price(cc, api)
+    if sell and stock > 0:
+        _pc[k] = (sell, stock, time.time())
+        return sell, stock, 'live', stock, 0
 
-    # Fallback to default INR prices
-    dp, ds = _get_default_price(cc, api)
-    if dp:
-        logger.info("best_price FALLBACK [%s]: ₹%s stock=%s", k, dp, ds)
-        return dp, ds, 'default', 0, 0
+    # Use stale cache if available (better than nothing)
+    if cached:
+        logger.warning("Using STALE cache [%s]: ₹%s", k, cached[0])
+        return cached[0], cached[1], 'stale', cached[1], 0
 
-    logger.error("best_price NONE [%s] — no price available", k)
     return None, 0, None, 0, 0
+
 
 def smart_buy(cc, api):
     oid, num = _dgotp_buy(cc, api)
@@ -647,10 +578,11 @@ def smart_buy(cc, api):
         return oid, num, 'dgotp'
     return None, None, None
 
+
 def _dgotp_buy(cc, api):
     """
-    DgOTP.in se number khareedna — multiple methods try karo
-    Returns: (order_id, phone_number) or (None, None)
+    dgotp.in se number buy karo — correct API format
+    Returns (order_id, phone_number) or (None, None)
     """
     if not DGOTP_KEY:
         logger.error("DGOTP_KEY not set!")
@@ -658,111 +590,93 @@ def _dgotp_buy(cc, api):
     country = DGOTP_CC.get(cc)
     service = DGOTP_SVC.get(api)
     if not country or not service:
-        logger.error("DGOTP buy: no mapping cc=%s->%s api=%s->%s", cc, country, api, service)
+        logger.error("Buy mapping missing: cc=%s->%s api=%s->%s", cc, country, api, service)
         return None, None
 
-    # Multiple attempts with different param combos
-    param_list = [
-        # Standard sms-activate format
-        {"api_key": DGOTP_KEY, "action": "getNumber", "service": service,
-         "country": country, "operator": "any"},
-        # Without operator
-        {"api_key": DGOTP_KEY, "action": "getNumber", "service": service,
-         "country": country},
-        # With operator=virtual
-        {"api_key": DGOTP_KEY, "action": "getNumber", "service": service,
-         "country": country, "operator": "virtual"},
-        # getNumberV2 (some versions)
-        {"api_key": DGOTP_KEY, "action": "getNumberV2", "service": service,
-         "country": country},
+    # dgotp.in supported params
+    attempts = [
+        {"api_key": DGOTP_KEY, "action": "getNumber",
+         "service": service, "country": country},
+        {"api_key": DGOTP_KEY, "action": "getNumber",
+         "service": service, "country": country, "operator": "any"},
+        {"api_key": DGOTP_KEY, "action": "getNumber",
+         "service": service, "country": country, "operator": "virtual"},
     ]
 
-    for i, params in enumerate(param_list):
+    for i, params in enumerate(attempts):
         try:
-            logger.info("DGOTP buy attempt %d/%d: country=%s service=%s params=%s",
-                        i+1, len(param_list), country, service,
-                        {k:v for k,v in params.items() if k != 'api_key'})
-            r = requests.get(DGOTP_BASE, params=params, timeout=25)
+            logger.info("Buy attempt %d/%d: country=%s service=%s",
+                        i+1, len(attempts), country, service)
+            r = requests.get(DGOTP_BASE, params=params, timeout=30)
             txt = r.text.strip()
-            logger.info("DGOTP buy response %d: [%s]", i+1, txt)
+            logger.info("Buy response %d: [%s]", i+1, txt)
 
-            # ── Standard text response: ACCESS_NUMBER:id:phone ───────────────
+            # ── Success: ACCESS_NUMBER:id:phone ──────────────────────────────
             if txt.startswith("ACCESS_NUMBER:"):
                 parts = txt.split(":")
                 if len(parts) >= 3:
                     oid = parts[1].strip()
-                    num = ":".join(parts[2:]).strip()
-                    # Clean phone number
-                    num = ''.join(filter(lambda x: x.isdigit() or x == '+', num))
-                    if oid and num and len(num) >= 7:
-                        # setStatus=1 — SMS ready
+                    num = parts[2].strip()
+                    if oid and num and len(num) >= 6:
+                        # Signal ready for SMS
                         try:
                             requests.get(DGOTP_BASE,
                                 params={"api_key": DGOTP_KEY, "action": "setStatus",
                                         "status": "1", "id": oid},
                                 timeout=10)
-                        except Exception as e:
-                            logger.warning("setStatus=1 failed: %s", e)
-                        logger.info("✅ DGOTP buy SUCCESS oid=%s num=%s", oid, num)
+                        except: pass
+                        logger.info("✅ BUY SUCCESS oid=%s num=%s", oid, num)
                         return oid, num
 
-            # ── JSON response (getNumberV2 / new API) ─────────────────────────
-            if r.headers.get('Content-Type','').startswith('application/json') or \
-               (txt.startswith('{') or txt.startswith('[')):
+            # ── JSON response ─────────────────────────────────────────────────
+            if txt and txt[0] in ('{', '['):
                 try:
-                    jdata = r.json()
-                    if isinstance(jdata, dict):
-                        oid = str(jdata.get("activationId") or jdata.get("id") or
-                                  jdata.get("orderId") or "")
-                        num = str(jdata.get("phoneNumber") or jdata.get("number") or
-                                  jdata.get("phone") or "")
-                        num = ''.join(filter(lambda x: x.isdigit() or x == '+', num))
-                        if oid and num and len(num) >= 7:
-                            logger.info("✅ DGOTP buy JSON SUCCESS oid=%s num=%s", oid, num)
+                    j = r.json()
+                    if isinstance(j, dict):
+                        oid = str(j.get("activationId") or j.get("id") or j.get("orderId") or "")
+                        num = str(j.get("phoneNumber") or j.get("number") or j.get("phone") or "")
+                        if oid and num and len(num) >= 6:
+                            logger.info("✅ BUY JSON SUCCESS oid=%s num=%s", oid, num)
                             return oid, num
-                except Exception as e:
-                    logger.warning("JSON parse attempt %d: %s", i+1, e)
+                except: pass
 
-            # ── Error responses — decide to retry or stop ─────────────────────
-            if txt == "NO_NUMBERS":
-                logger.warning("DGOTP NO_NUMBERS attempt %d: %s/%s", i+1, cc, api)
-                continue  # try next method
-            elif txt == "NO_BALANCE":
-                logger.error("❌ DGOTP NO_BALANCE!")
+            # ── Terminal errors — stop all attempts ──────────────────────────
+            if txt == "NO_BALANCE":
+                logger.error("❌ NO_BALANCE on dgotp.in!")
                 try:
                     bot.send_message(OWNER_ID,
-                        f"🚨 *DgOTP Balance Khatam!*\n\n"
-                        f"dgotp.in pe balance add karo!\n"
-                        f"Service: `{api}` Country: `{cc}`\n"
-                        f"🔗 https://dgotp.in/dashboard")
+                        "🚨 *DgOTP Balance Khatam!*\n"
+                        f"Service: `{api}` | Country: `{cc}`\n"
+                        "https://dgotp.in/dashboard pe recharge karo!")
                 except: pass
-                return None, None  # No point retrying
-            elif txt in ("BAD_KEY", "WRONG_KEY", "ERROR_WRONG_KEY"):
+                return None, None
+            if txt in ("BAD_KEY", "WRONG_KEY", "ERROR_WRONG_KEY"):
                 logger.error("❌ DGOTP BAD KEY!")
                 return None, None
-            elif txt == "WRONG_COUNTRY_ID":
-                logger.error("❌ DGOTP WRONG_COUNTRY_ID: %s->%s", cc, country)
-                break  # Try next if available
-            elif txt.startswith("ERROR"):
-                logger.error("DGOTP ERROR attempt %d: %s", i+1, txt)
+
+            # ── Retriable ────────────────────────────────────────────────────
+            if txt == "NO_NUMBERS":
+                logger.warning("NO_NUMBERS attempt %d: %s/%s", i+1, cc, api)
                 continue
-            else:
-                logger.warning("DGOTP unknown response attempt %d: [%s]", i+1, txt)
+            if txt == "WRONG_COUNTRY_ID":
+                logger.error("WRONG_COUNTRY_ID: %s->%s", cc, country)
+                break
+
+            logger.warning("Unknown response attempt %d: [%s]", i+1, txt)
 
         except requests.Timeout:
-            logger.error("DGOTP buy TIMEOUT attempt %d", i+1)
-            continue
+            logger.error("Buy TIMEOUT attempt %d", i+1)
         except Exception as e:
-            logger.error("DGOTP buy exception attempt %d: %s", i+1, e)
-            continue
+            logger.error("Buy exception attempt %d: %s", i+1, e)
 
-    logger.error("❌ DGOTP buy FAILED all attempts: %s/%s", cc, api)
+    logger.error("❌ BUY FAILED all attempts: %s/%s", cc, api)
     return None, None
+
 
 def check_otp(oid, source):
     """
-    DgOTP se OTP fetch karo — multiple response formats handle karo
-    Returns: otp_string or None
+    OTP status check — dgotp.in getStatus endpoint
+    Returns otp_string or None (None = still waiting)
     """
     if source != 'dgotp':
         return None
@@ -771,47 +685,42 @@ def check_otp(oid, source):
             params={"api_key": DGOTP_KEY, "action": "getStatus", "id": oid},
             timeout=15)
         txt = r.text.strip()
-        logger.debug("DGOTP getStatus [%s]: [%s]", oid, txt)
+        logger.debug("getStatus [%s]: [%s]", oid, txt)
 
         # Format 1: STATUS_OK:123456
         if txt.startswith("STATUS_OK:"):
             code = txt.split(":", 1)[1].strip()
-            if code and len(code) >= 4:
-                logger.info("✅ DGOTP OTP received [%s]: %s", oid, code)
+            if code and len(code) >= 3:
+                logger.info("✅ OTP received [%s]: %s", oid, code)
                 return code
 
-        # Format 2: plain digits
-        if txt.isdigit() and len(txt) >= 4:
-            logger.info("✅ DGOTP OTP plain digits [%s]: %s", oid, txt)
+        # Format 2: plain digits only
+        if txt.isdigit() and len(txt) >= 3:
+            logger.info("✅ OTP plain [%s]: %s", oid, txt)
             return txt
 
-        # Format 3: JSON response
-        if txt.startswith('{'):
+        # Format 3: JSON {"code":"123456"}
+        if txt and txt[0] == '{':
             try:
-                jdata = r.json()
-                code = (str(jdata.get("smsCode","")) or str(jdata.get("code","")) or
-                        str(jdata.get("otp","")) or str(jdata.get("sms","")))
-                if code and code != "None" and len(code) >= 4:
-                    logger.info("✅ DGOTP OTP JSON [%s]: %s", oid, code)
+                j = r.json()
+                code = str(j.get("smsCode") or j.get("code") or j.get("otp") or j.get("sms") or "")
+                if code and code != "None" and len(code) >= 3:
+                    logger.info("✅ OTP JSON [%s]: %s", oid, code)
                     return code
             except: pass
 
-        # Format 4: colon-separated, last part is OTP
-        if ":" in txt and not txt.startswith("STATUS_WAIT") and not txt.startswith("STATUS_CANCEL"):
+        # Format 4: ANYTHING:DIGITS
+        if ":" in txt and not any(txt.startswith(x) for x in
+                                  ("STATUS_WAIT","STATUS_CANCEL","STATUS_OK")):
             last = txt.split(":")[-1].strip()
-            if last.isdigit() and len(last) >= 4:
-                logger.info("✅ DGOTP OTP colon [%s]: %s", oid, last)
+            if last.isdigit() and len(last) >= 3:
+                logger.info("✅ OTP colon [%s]: %s", oid, last)
                 return last
 
-        # These mean waiting — not an error
-        if txt in ("STATUS_WAIT_CODE", "STATUS_WAIT_RETRY", "STATUS_WAIT_RESEND",
-                   "STATUS_CANCEL", "BANNED", ""):
-            logger.debug("DGOTP still waiting [%s]: %s", oid, txt)
-
     except requests.Timeout:
-        logger.warning("DGOTP getStatus TIMEOUT [%s]", oid)
+        logger.warning("getStatus TIMEOUT [%s]", oid)
     except Exception as e:
-        logger.error("DGOTP getStatus error [%s]: %s", oid, e)
+        logger.error("getStatus error [%s]: %s", oid, e)
     return None
 
 def cancel_order_api(oid, source):
@@ -1028,9 +937,12 @@ def find_svc(key):
     return None, None
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  DECORATORS
+#  DECORATORS — functools.wraps REQUIRED for telebot to register correctly
 # ══════════════════════════════════════════════════════════════════════════════
+import functools
+
 def ban_check(fn):
+    @functools.wraps(fn)
     def w(msg):
         if is_banned(msg.from_user.id):
             bot.send_message(msg.chat.id, f"🚫 *Aap ban hain!*\nSupport: {SUPPORT_BOT}"); return
@@ -1038,6 +950,7 @@ def ban_check(fn):
     return w
 
 def join_check(fn):
+    @functools.wraps(fn)
     def w(msg):
         uid = msg.from_user.id
         if uid == OWNER_ID: fn(msg); return
@@ -1047,6 +960,7 @@ def join_check(fn):
     return w
 
 def gaali_check(fn):
+    @functools.wraps(fn)
     def w(msg):
         if msg.from_user.id == OWNER_ID: fn(msg); return
         if any(x in (msg.text or "").lower() for x in BAD_WORDS):
@@ -1061,6 +975,7 @@ def gaali_check(fn):
     return w
 
 def owner_only(fn):
+    @functools.wraps(fn)
     def w(msg):
         if msg.from_user.id != OWNER_ID: return
         fn(msg)
@@ -1115,61 +1030,109 @@ ADMIN_BTNS = {
 # ══════════════════════════════════════════════════════════════════════════════
 @bot.message_handler(commands=['testapi'])
 def cmd_testapi(msg):
-    """Admin debug: DgOTP API test karo"""
+    """Admin: Live DgOTP API test — real responses dikhao"""
     if msg.from_user.id != OWNER_ID: return
     parts = msg.text.split()
     if len(parts) < 3:
         bot.send_message(msg.chat.id,
             "📡 *API Test*\n\n"
             "Usage: `/testapi whatsapp russia`\n"
-            "Example: `/testapi whatsapp india`\n"
-            "Example: `/testapi telegram russia`\n\n"
-            "Yeh live DgOTP API check karega aur full response dikhayega."); return
+            "Example: `/testapi whatsapp india`\n\n"
+            "Supported services: whatsapp, telegram, instagram, google, facebook, tiktok\n"
+            "Supported countries: russia, india, usa, england, ukraine, brazil, indonesia, kenya, nigeria, pakistan, cambodia, vietnam, philippines, bangladesh, kazakhstan"); return
 
-    api = parts[1].lower()
-    cc  = parts[2].lower()
-    country = DGOTP_CC.get(cc)
-    service = DGOTP_SVC.get(api)
-    bot.send_message(msg.chat.id, f"⏳ Testing DgOTP for {api}/{cc}...\nCountry code: {country}, Service: {service}")
+    api_name = parts[1].lower()
+    cc_name  = parts[2].lower()
+    country  = DGOTP_CC.get(cc_name)
+    service  = DGOTP_SVC.get(api_name)
 
-    # Test balance first
+    pm = bot.send_message(msg.chat.id,
+        f"⏳ Testing DgOTP API...\n"
+        f"Country: `{cc_name}` → code `{country}`\n"
+        f"Service: `{api_name}` → code `{service}`")
+
+    results = []
+
+    # 1. Balance check
     try:
-        rb = requests.get(DGOTP_BASE, params={"api_key": DGOTP_KEY, "action": "getBalance"}, timeout=10)
-        bot.send_message(msg.chat.id, f"💰 Balance check: `{rb.text.strip()}`")
+        rb = requests.get(DGOTP_BASE,
+            params={"api_key": DGOTP_KEY, "action": "getBalance"}, timeout=10)
+        results.append(f"💰 Balance: `{rb.text.strip()}`")
     except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ Balance check fail: {e}")
+        results.append(f"❌ Balance check: {e}")
 
     if not country or not service:
-        bot.send_message(msg.chat.id, f"❌ No mapping found!\ncc={cc}→{country}, api={api}→{service}"); return
+        bot.edit_message_text(
+            f"❌ Mapping nahi mila!\n"
+            f"cc=`{cc_name}`→`{country}` api=`{api_name}`→`{service}`\n"
+            f"DGOTP_CC ya DGOTP_SVC mein add karo.",
+            msg.chat.id, pm.message_id); return
 
-    # Test getPrices
+    # 2. getNumbersStatus
     try:
-        r = requests.get(DGOTP_BASE,
-            params={"api_key": DGOTP_KEY, "action": "getPrices", "service": service, "country": country},
-            timeout=15)
-        bot.send_message(msg.chat.id, f"📊 getPrices response:\n`{r.text[:500]}`")
-    except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ getPrices error: {e}")
-
-    # Test getNumbersStatus
-    try:
-        r2 = requests.get(DGOTP_BASE,
+        r1 = requests.get(DGOTP_BASE,
             params={"api_key": DGOTP_KEY, "action": "getNumbersStatus", "country": country},
             timeout=15)
-        bot.send_message(msg.chat.id, f"📊 getNumbersStatus:\n`{r2.text[:500]}`")
+        raw1 = r1.text.strip()
+        results.append(f"📊 getNumbersStatus:\n`{raw1[:300]}`")
     except Exception as e:
-        bot.send_message(msg.chat.id, f"❌ getNumbersStatus error: {e}")
+        results.append(f"❌ getNumbersStatus: {e}")
 
-    # Test price engine result
-    _pc.pop(f"{cc}|{api}", None)
-    pdg, sdg = _dgotp_price(cc, api)
-    dp, ds = _get_default_price(cc, api)
-    bot.send_message(msg.chat.id,
-        f"📊 *Price Engine Result:*\n"
-        f"DgOTP: ₹{pdg} (stock: {sdg})\n"
-        f"Default: ₹{dp} (stock: {ds})\n"
-        f"{'✅ DgOTP LIVE' if pdg else '❌ DgOTP FAILED — using fallback'}")
+    # 3. getPrices
+    try:
+        r2 = requests.get(DGOTP_BASE,
+            params={"api_key": DGOTP_KEY, "action": "getPrices",
+                    "service": service, "country": country},
+            timeout=15)
+        raw2 = r2.text.strip()
+        results.append(f"📊 getPrices:\n`{raw2[:300]}`")
+    except Exception as e:
+        results.append(f"❌ getPrices: {e}")
 
+    # 4. Price engine result
+    _pc.pop(f"{cc_name}|{api_name}", None)
+    sell, stock = _dgotp_price(cc_name, api_name)
+    if sell:
+        results.append(f"✅ *PRICE ENGINE: ₹{sell} (stock: {stock})*")
+    else:
+        results.append(f"❌ *PRICE ENGINE: FAILED — no price returned*")
+
+    bot.edit_message_text(
+        f"🔍 *DgOTP Test: {api_name}/{cc_name}*\n\n" + "\n\n".join(results),
+        msg.chat.id, pm.message_id)
+
+
+@bot.message_handler(commands=['debugbuy'])
+def cmd_debugbuy(msg):
+    """Admin: actual buy test (auto-cancels after success)"""
+    if msg.from_user.id != OWNER_ID: return
+    parts = msg.text.split()
+    if len(parts) < 3:
+        bot.send_message(msg.chat.id,
+            "🔧 *Debug Buy*\n\nUsage: `/debugbuy whatsapp russia`\n"
+            "⚠️ Real API call — dgotp balance katega (cancel bhi karega)"); return
+    api_name = parts[1].lower()
+    cc_name  = parts[2].lower()
+    bot.send_message(msg.chat.id, f"⏳ Buy test: {api_name}/{cc_name}...")
+    oid, num = _dgotp_buy(cc_name, api_name)
+    if oid and num:
+        bot.send_message(msg.chat.id,
+            f"✅ *BUY SUCCESS!*\nOID: `{oid}`\nNumber: `{num}`\n\nCancelling...")
+        try:
+            requests.get(DGOTP_BASE,
+                params={"api_key": DGOTP_KEY, "action": "setStatus", "status": "8", "id": oid},
+                timeout=10)
+            bot.send_message(msg.chat.id, "✅ Cancelled — dgotp.in will refund automatically")
+        except Exception as e:
+            bot.send_message(msg.chat.id, f"⚠️ Cancel failed: {e}\nManually cancel order `{oid}` on dgotp.in")
+    else:
+        bot.send_message(msg.chat.id,
+            "❌ *BUY FAILED!*\n\nCheck logs.\nReasons:\n"
+            "• DgOTP balance low\n• Wrong country code\n• No stock\n"
+            "Run `/testapi` first to see raw API response")
+
+
+@bot.message_handler(commands=['start'])
 def cmd_start(msg):
     uid = msg.from_user.id
     args = msg.text.split()
@@ -1194,34 +1157,7 @@ def _greet(uid, name):
         "👇 Kya karna hai?",
         reply_markup=main_menu(uid))
 
-@bot.message_handler(commands=['debugbuy'])
-def cmd_debugbuy(msg):
-    """Admin: simulate buy flow bina balance kataye"""
-    if msg.from_user.id != OWNER_ID: return
-    parts = msg.text.split()
-    if len(parts) < 3:
-        bot.send_message(msg.chat.id,
-            "🔧 *Debug Buy*\n\nUsage: `/debugbuy whatsapp russia`\n"
-            "Yeh actual number buy attempt karega aur result dikhayega.\n"
-            "⚠️ Real API call hoga — balance katega dgotp.in se (agar success hua to cancel bhi karega)"); return
-    api = parts[1].lower()
-    cc  = parts[2].lower()
-    bot.send_message(msg.chat.id, f"🔧 Buy test: {api}/{cc}...")
-    oid, num = _dgotp_buy(cc, api)
-    if oid and num:
-        bot.send_message(msg.chat.id, f"✅ *Buy SUCCESS!*\nOID: `{oid}`\nNum: `{num}`\n\nCancelling...")
-        try:
-            cancel_order_api(str(oid), 'dgotp')
-            bot.send_message(msg.chat.id, "✅ Cancelled (refund will process on dgotp.in)")
-        except Exception as e:
-            bot.send_message(msg.chat.id, f"⚠️ Cancel failed: {e}\nManually cancel on dgotp.in: order {oid}")
-    else:
-        bot.send_message(msg.chat.id,
-            "❌ *Buy FAILED!*\n\nCheck logs for details.\nCommon reasons:\n"
-            "• DgOTP balance khatam\n• Wrong country code\n• No stock available\n"
-            "Use `/testapi` to debug API responses")
-
-
+@bot.callback_query_handler(func=lambda c: c.data == "check_join")
 def cb_check_join(call):
     if is_joined(call.from_user.id):
         bot.answer_callback_query(call.id, "✅ Verified!")
@@ -1278,8 +1214,8 @@ def show_countries(msg):
         sell, stock, src, ssp, svk = best_price(info['cc'], info['api'])
         if sell and stock > 0:
             has = True
-            if src == 'default':
-                stock_ic = "📋"   # Fallback price indicator
+            if src == 'stale':
+                stock_ic = "📋"   # stale cache
             elif stock <= LOW_STOCK:
                 stock_ic = "🔴"
             elif stock <= 20:
@@ -2012,47 +1948,32 @@ _settings_state = {}
 
 @bot.message_handler(func=lambda m: m.text == "⚙️ Bot Settings" and m.from_user.id == OWNER_ID)
 def ab_bot_settings(msg):
-    margin    = get_margin()
-    usdt_rate = get_usdt_rate()
-    warn = " ⚠️ BAHUT ZYADA!" if margin > 1.80 else ""
-    mk   = types.InlineKeyboardMarkup(row_width=1)
+    mk = types.InlineKeyboardMarkup(row_width=1)
     mk.add(
-        types.InlineKeyboardButton(f"📈 Margin Set ({int((margin-1)*100)}%){warn}", callback_data="set_margin"),
-        types.InlineKeyboardButton(f"💱 USDT Rate Set (₹{usdt_rate})",              callback_data="set_usdt_rate"),
-        types.InlineKeyboardButton("🔄 Reset Margin to 40% (Recommended)",          callback_data="set_reset_margin"),
-        types.InlineKeyboardButton("🗑 Price Cache Clear",                           callback_data="set_clear_cache"),
+        types.InlineKeyboardButton("🗑 Price Cache Clear (Force Fresh Prices)", callback_data="set_clear_cache"),
+        types.InlineKeyboardButton("🔄 Services Cache Clear",                    callback_data="set_clear_svc"),
     )
     bot.send_message(msg.chat.id,
         f"⚙️ *Bot Settings*\n\n"
-        f"📈 Margin: *{int((margin-1)*100)}%*{warn}\n"
-        f"💱 USDT Rate: *₹{usdt_rate}*\n\n"
-        f"_Recommended: Margin 40%, USDT Rate ₹85-90_", reply_markup=mk)
+        f"📈 Margin: *10% (fixed)*\n"
+        f"🔗 API: *DgOTP.in only*\n"
+        f"💰 Margin: DgOTP raw INR × 1.10\n\n"
+        f"_Use '/testapi whatsapp india' to debug live prices_", reply_markup=mk)
 
-@bot.callback_query_handler(func=lambda c: c.data in ["set_margin","set_usdt_rate","set_clear_cache","set_reset_margin"])
+@bot.callback_query_handler(func=lambda c: c.data in ["set_margin","set_usdt_rate","set_clear_cache","set_reset_margin","set_clear_svc"])
 def cb_settings(call):
     if call.from_user.id != OWNER_ID: return
-    if call.data == "set_clear_cache":
+    if call.data in ("set_clear_cache", "set_reset_margin"):
         _pc.clear()
-        bot.answer_callback_query(call.id, "✅ Cache cleared!")
-        bot.send_message(OWNER_ID, "✅ *Price cache cleared!*\nAb fresh prices fetch honge.")
-    elif call.data == "set_reset_margin":
-        set_setting("margin", 1.40)
+        bot.answer_callback_query(call.id, "✅ Price cache cleared!")
+        bot.send_message(OWNER_ID, "✅ *Price cache cleared!*\nNext request pe fresh prices fetch honge.")
+    elif call.data == "set_clear_svc":
+        global _svc_cache, _svc_cache_ts
+        _svc_cache = {}
+        _svc_cache_ts = 0
         _pc.clear()
-        bot.answer_callback_query(call.id, "✅ Margin reset to 40%!")
-        bot.send_message(OWNER_ID,
-            "✅ *Margin Reset Ho Gaya!*\n\n📈 Naya Margin: *40%*\n🗑 Cache cleared!\nAb correct prices dikhenge.")
-    elif call.data == "set_margin":
-        _settings_state[OWNER_ID] = "margin"
-        bot.answer_callback_query(call.id)
-        bot.send_message(OWNER_ID,
-            f"📈 *Margin Set Karein*\n\nCurrent: *{int((get_margin()-1)*100)}%*\n\n"
-            f"Naya % bhejein (e.g. `40` for 40%)\nRange: 10–200%\n/cancel")
-    elif call.data == "set_usdt_rate":
-        _settings_state[OWNER_ID] = "usdt_rate"
-        bot.answer_callback_query(call.id)
-        bot.send_message(OWNER_ID,
-            f"💱 *USDT Rate Set Karein*\n\nCurrent: *₹{get_usdt_rate()}*\n\n"
-            f"Naya rate bhejein (e.g. `87.5`)\n/cancel")
+        bot.answer_callback_query(call.id, "✅ All caches cleared!")
+        bot.send_message(OWNER_ID, "✅ *All caches cleared!*\n(price + services cache)")
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  BALANCE ADJUST (old system — shows user profile + buttons)
@@ -2434,11 +2355,8 @@ def cb_lpc_check(call):
         t += f"💰 Price: ₹{pdg_raw:.2f} (sell ₹{math.ceil(pdg_raw*DGOTP_MARGIN)})\n"
         t += "❌ *Stock khatam — No Numbers*\n"
     else:
-        dp, ds = _get_default_price(cc, api)
         t += f"❌ *DgOTP se live price nahi mila*\n\n"
-        if dp:
-            t += f"📋 Default fallback: ₹{dp} (stock: {ds})\n"
-        t += f"\n_DgOTP API balance check karein_"
+        t += f"_DgOTP API balance check karein — /testapi {api} {cc} run karein_"
     t += f"\n\n🕐 {datetime.utcnow().strftime('%H:%M')} UTC"
 
     mk = types.InlineKeyboardMarkup()
@@ -2459,12 +2377,11 @@ def cb_lpc_all(call):
                 cc = info['cc']
                 _pc.pop(f"{cc}|{api}", None)
                 pdg, sdg = _dgotp_price(cc, api)
-                dp, _    = _get_default_price(cc, api)
                 if pdg and sdg > 0:
                     ic = "🟢" if sdg > 20 else ("🟡" if sdg > LOW_STOCK else "🔴")
                     results.append(f"{ic}{info['flag']} {info['country']}: *₹{pdg}* 📦{sdg}")
-                elif dp:
-                    results.append(f"📋{info['flag']} {info['country']}: ₹{dp} (default)")
+                else:
+                    results.append(f"❌{info['flag']} {info['country']}: No live price")
     t  = f"📊 *{api.title()} — All Countries (DgOTP)*\n"
     t += f"Margin: +{int((DGOTP_MARGIN-1)*100)}% | {datetime.utcnow().strftime('%H:%M')} UTC\n"
     t += "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -2521,82 +2438,197 @@ def cmd_del_platform(msg):
 @bot.message_handler(commands=['add'])
 @owner_only
 def cmd_add(msg):
+    """Admin: /add USER_ID AMOUNT [METHOD]"""
     try:
         parts  = msg.text.split()
-        uid    = int(parts[1]); amount = float(parts[2])
+        if len(parts) < 3:
+            bot.reply_to(msg, "❌ Format: `/add USER_ID AMOUNT`\nExample: `/add 123456789 500`"); return
+        uid    = int(parts[1])
+        amount = float(parts[2])
         method = parts[3].upper() if len(parts) > 3 else "MANUAL"
+        if amount <= 0:
+            bot.reply_to(msg, "❌ Amount 0 se zyada hona chahiye!"); return
         _do_approve(uid, amount, method)
         u = users_col.find_one({"user_id": uid}) or {}
-        bot.reply_to(msg, f"✅ ₹{amount:.0f} added to `{uid}` ({method})\nNew balance: ₹{u.get('balance',0):.0f}")
+        bot.reply_to(msg,
+            f"✅ *Add Done!*\n"
+            f"👤 `{uid}`\n"
+            f"💰 +₹{amount:.0f} ({method})\n"
+            f"💳 New Balance: ₹{u.get('balance',0):.0f}")
+    except (IndexError, ValueError) as e:
+        bot.reply_to(msg, f"❌ Format galat!\nSahi format: `/add USER_ID AMOUNT`\nExample: `/add 123456789 500`")
     except Exception as e:
-        bot.reply_to(msg, f"❌ Error: {e}\nFormat: `/add USER_ID AMOUNT`")
+        bot.reply_to(msg, f"❌ Error: {e}")
 
 @bot.message_handler(commands=['deduct'])
 @owner_only
 def cmd_deduct(msg):
+    """Admin: /deduct USER_ID AMOUNT"""
     try:
-        _, uid_s, amt_s = msg.text.split()
-        uid    = int(uid_s); amount = float(amt_s)
+        parts = msg.text.split()
+        if len(parts) < 3:
+            bot.reply_to(msg, "❌ Format: `/deduct USER_ID AMOUNT`"); return
+        uid    = int(parts[1])
+        amount = float(parts[2])
         u_b    = users_col.find_one({"user_id": uid}) or {}
         add_balance(uid, -amount)
         log_admin_action(OWNER_ID, uid, amount, "deduct", "cmd")
         u_a = users_col.find_one({"user_id": uid}) or {}
-        bot.reply_to(msg, f"✅ ₹{amount:.0f} deducted from `{uid}`\n₹{u_b.get('balance',0):.0f} → ₹{u_a.get('balance',0):.0f}")
-        try: bot.send_message(uid, f"❕ ₹{amount:.0f} balance adjust hua. Naya Balance: ₹{u_a.get('balance',0):.0f}")
+        bot.reply_to(msg,
+            f"✅ *Deduct Done!*\n"
+            f"👤 `{uid}`\n"
+            f"₹{u_b.get('balance',0):.0f} → ₹{u_a.get('balance',0):.0f}")
+        try: bot.send_message(uid,
+            f"❕ ₹{amount:.0f} balance adjust hua.\nNaya Balance: ₹{u_a.get('balance',0):.0f}")
         except: pass
-    except: bot.reply_to(msg, "❌ Format: `/deduct USER_ID AMOUNT`")
+    except (IndexError, ValueError):
+        bot.reply_to(msg, "❌ Format: `/deduct USER_ID AMOUNT`")
+    except Exception as e:
+        bot.reply_to(msg, f"❌ Error: {e}")
 
 @bot.message_handler(commands=['setbal'])
 @owner_only
 def cmd_setbal(msg):
+    """Admin: /setbal USER_ID AMOUNT"""
     try:
         parts  = msg.text.split()
-        uid    = int(parts[1]); amount = float(parts[2])
+        if len(parts) < 3:
+            bot.reply_to(msg, "❌ Format: `/setbal USER_ID AMOUNT`"); return
+        uid    = int(parts[1])
+        amount = float(parts[2])
         u_b    = users_col.find_one({"user_id": uid}) or {}
         users_col.update_one({"user_id": uid}, {"$set": {"balance": amount}})
         log_admin_action(OWNER_ID, uid, amount, "set", "cmd")
-        bot.reply_to(msg, f"✅ Balance SET!\n`{uid}`: ₹{u_b.get('balance',0):.0f} → ₹{amount:.0f}")
-    except: bot.reply_to(msg, "❌ Format: `/setbal USER_ID AMOUNT`")
+        bot.reply_to(msg,
+            f"✅ *Balance SET!*\n"
+            f"👤 `{uid}`\n"
+            f"₹{u_b.get('balance',0):.0f} → ₹{amount:.0f}")
+    except (IndexError, ValueError):
+        bot.reply_to(msg, "❌ Format: `/setbal USER_ID AMOUNT`")
+    except Exception as e:
+        bot.reply_to(msg, f"❌ Error: {e}")
 
 @bot.message_handler(commands=['reject'])
 @owner_only
 def cmd_reject(msg):
+    """
+    Admin: /reject USER_ID
+    Pending deposit reject karo + user ko notify karo
+    """
     try:
-        uid = int(msg.text.split()[1])
-        deposits_col.update_one(
+        parts = msg.text.split()
+        if len(parts) < 2:
+            bot.reply_to(msg,
+                "❌ Format: `/reject USER_ID`\n"
+                "Example: `/reject 8351461026`"); return
+        uid = int(parts[1])
+        # Update latest pending deposit
+        result = deposits_col.find_one_and_update(
             {"user_id": uid, "status": "pending"},
-            {"$set": {"status": "rejected"}}, sort=[("created_at", -1)])
-        bot.send_message(uid, f"❌ *Deposit Reject Hua.*\nScreenshot unclear tha.\nRetry: {SUPPORT_BOT}")
-        bot.reply_to(msg, f"✅ Rejected `{uid}`")
-    except: bot.reply_to(msg, "❌ `/reject USER_ID`")
+            {"$set": {"status": "rejected",
+                      "rejected_at": datetime.utcnow(),
+                      "rejected_by": OWNER_ID}},
+            sort=[("created_at", -1)])
+        if result:
+            # Notify user
+            try:
+                bot.send_message(uid,
+                    f"❌ *Deposit Reject Ho Gaya*\n\n"
+                    f"Karan: Screenshot unclear / invalid transaction.\n\n"
+                    f"📌 *Dobara karne ke liye:*\n"
+                    f"1️⃣ Clear screenshot bhejein\n"
+                    f"2️⃣ Sahi amount transfer confirm karein\n\n"
+                    f"📞 Help: {SUPPORT_BOT}")
+            except Exception as notify_err:
+                logger.warning("Reject notify user failed: %s", notify_err)
+            bot.reply_to(msg,
+                f"✅ *Rejected!*\n"
+                f"👤 User: `{uid}`\n"
+                f"📅 Deposit Date: {result.get('created_at','?')}\n"
+                f"💳 Method: {result.get('method','?')}")
+        else:
+            # No pending deposit found — still reply OK (may have already been handled)
+            bot.reply_to(msg,
+                f"⚠️ User `{uid}` ka koi pending deposit nahi mila.\n"
+                f"(Ho sakta hai already approved/rejected ho gaya ho)")
+    except (IndexError, ValueError):
+        bot.reply_to(msg,
+            "❌ Format galat!\n"
+            "Sahi format: `/reject USER_ID`\n"
+            "Example: `/reject 8351461026`")
+    except Exception as e:
+        logger.error("cmd_reject error: %s", e)
+        bot.reply_to(msg, f"❌ Error: {str(e)}\nFormat: `/reject USER_ID`")
+
+@bot.message_handler(commands=['approve'])
+@owner_only
+def cmd_approve(msg):
+    """Admin: /approve USER_ID AMOUNT — deposit approve shortcut"""
+    try:
+        parts = msg.text.split()
+        if len(parts) < 3:
+            bot.reply_to(msg,
+                "❌ Format: `/approve USER_ID AMOUNT`\n"
+                "Example: `/approve 8351461026 500`"); return
+        uid    = int(parts[1])
+        amount = float(parts[2])
+        if amount <= 0:
+            bot.reply_to(msg, "❌ Amount 0 se zyada hona chahiye!"); return
+        _do_approve(uid, amount, "MANUAL")
+        u = users_col.find_one({"user_id": uid}) or {}
+        bot.reply_to(msg,
+            f"✅ *Approved!*\n"
+            f"👤 User: `{uid}`\n"
+            f"💰 +₹{amount:.0f}\n"
+            f"💳 New Balance: ₹{u.get('balance',0):.0f}")
+    except (IndexError, ValueError):
+        bot.reply_to(msg, "❌ Format: `/approve USER_ID AMOUNT`")
+    except Exception as e:
+        bot.reply_to(msg, f"❌ Error: {e}")
 
 @bot.message_handler(commands=['ban'])
 @owner_only
 def cmd_ban(msg):
+    """Admin: /ban USER_ID"""
     try:
-        uid = int(msg.text.split()[1])
+        parts = msg.text.split()
+        if len(parts) < 2:
+            bot.reply_to(msg, "❌ Format: `/ban USER_ID`"); return
+        uid = int(parts[1])
         users_col.update_one({"user_id": uid}, {"$set": {"banned": True}})
-        try: bot.send_message(uid, f"🚫 Ban. Appeal: {SUPPORT_BOT}")
+        try: bot.send_message(uid, f"🚫 *Aap ban ho gaye hain.*\nAppeal: {SUPPORT_BOT}")
         except: pass
         bot.reply_to(msg, f"🚫 `{uid}` banned.")
-    except: bot.reply_to(msg, "❌ `/ban USER_ID`")
+    except (IndexError, ValueError):
+        bot.reply_to(msg, "❌ Format: `/ban USER_ID`")
+    except Exception as e:
+        bot.reply_to(msg, f"❌ Error: {e}")
 
 @bot.message_handler(commands=['unban'])
 @owner_only
 def cmd_unban(msg):
+    """Admin: /unban USER_ID"""
     try:
-        uid = int(msg.text.split()[1])
+        parts = msg.text.split()
+        if len(parts) < 2:
+            bot.reply_to(msg, "❌ Format: `/unban USER_ID`"); return
+        uid = int(parts[1])
         users_col.update_one({"user_id": uid}, {"$set": {"banned": False}})
-        try: bot.send_message(uid, "✅ Ban hata diya.")
+        try: bot.send_message(uid, "✅ *Aapka ban hata diya gaya!*\nAb bot use kar sakte hain.")
         except: pass
         bot.reply_to(msg, f"✅ `{uid}` unbanned.")
-    except: bot.reply_to(msg, "❌ `/unban USER_ID`")
+    except (IndexError, ValueError):
+        bot.reply_to(msg, "❌ Format: `/unban USER_ID`")
+    except Exception as e:
+        bot.reply_to(msg, f"❌ Error: {e}")
 
 @bot.message_handler(commands=['broadcast'])
 @owner_only
 def cmd_bc(msg):
+    """Admin: /broadcast MESSAGE"""
     t = msg.text.replace('/broadcast','',1).strip()
-    if not t: bot.reply_to(msg, "❌ `/broadcast MSG`"); return
+    if not t:
+        bot.reply_to(msg, "❌ Format: `/broadcast Aapka message yahan`"); return
     _do_broadcast(msg.chat.id, t)
 
 @bot.message_handler(commands=['stats'])
@@ -2606,24 +2638,40 @@ def cmd_stats(msg): _send_stats(msg.chat.id)
 @bot.message_handler(commands=['userinfo'])
 @owner_only
 def cmd_uinfo(msg):
+    """Admin: /userinfo USER_ID or /userinfo @username"""
     try:
         arg = msg.text.split()[1]
-        u   = find_user_by_username(arg) if arg.startswith('@') else users_col.find_one({"user_id": int(arg)})
-        if not u: bot.reply_to(msg, "❌ User nahi mila."); return
+        u   = find_user_by_username(arg) if arg.startswith('@') \
+              else users_col.find_one({"user_id": int(arg)})
+        if not u:
+            bot.reply_to(msg, f"❌ User `{arg}` nahi mila."); return
         _show_user_for_adjust(msg.chat.id, u)
-    except: bot.reply_to(msg, "❌ `/userinfo USER_ID` ya `/userinfo @username`")
+    except IndexError:
+        bot.reply_to(msg, "❌ Format: `/userinfo USER_ID` ya `/userinfo @username`")
+    except Exception as e:
+        bot.reply_to(msg, f"❌ Error: {e}")
 
 @bot.message_handler(commands=['balance'])
 @owner_only
 def cmd_check_bal(msg):
+    """Admin: /balance USER_ID"""
     try:
         arg = msg.text.split()[1]
-        u   = find_user_by_username(arg) if arg.startswith('@') else users_col.find_one({"user_id": int(arg)})
-        if not u: bot.reply_to(msg, "❌ User nahi mila."); return
+        u   = find_user_by_username(arg) if arg.startswith('@') \
+              else users_col.find_one({"user_id": int(arg)})
+        if not u:
+            bot.reply_to(msg, f"❌ User `{arg}` nahi mila."); return
+        done = orders_col.count_documents({"user_id": u['user_id'], "status": "done"})
         bot.reply_to(msg,
             f"👤 `{u['user_id']}` @{u.get('username','N/A')}\n"
-            f"💵 Balance: ₹{u.get('balance',0):.0f}\n🛒 Orders: {u.get('orders',0)}")
-    except: bot.reply_to(msg, "❌ `/balance USER_ID` ya `/balance @username`")
+            f"📛 {u.get('full_name','N/A')}\n"
+            f"💵 Balance: ₹{u.get('balance',0):.0f}\n"
+            f"🛒 Orders done: {done}\n"
+            f"🚫 Banned: {'Yes' if u.get('banned') else 'No'}")
+    except IndexError:
+        bot.reply_to(msg, "❌ Format: `/balance USER_ID` ya `/balance @username`")
+    except Exception as e:
+        bot.reply_to(msg, f"❌ Error: {e}")
 
 @bot.message_handler(commands=['cancel'])
 @owner_only
@@ -2899,14 +2947,11 @@ def _stock_report(cid):
         cc = cc_name
         _pc.pop(f"{cc}|{api}", None)
         pdg, sdg = _dgotp_price(cc, api)
-        dp, ds   = _get_default_price(cc, api)
         if pdg and sdg > 0:
             ic = "🔴" if sdg <= LOW_STOCK else ("🟡" if sdg <= 20 else "🟢")
             t += f"{ic}{flag} {cc.title()} {svc_name}: ₹{pdg} | 📦{sdg}\n"
-        elif dp:
-            t += f"📋{flag} {cc.title()} {svc_name}: No live | Fallback ₹{dp}\n"
         else:
-            t += f"⚫{flag} {cc.title()} {svc_name}: No data\n"
+            t += f"⚫{flag} {cc.title()} {svc_name}: No live price\n"
     bot.send_message(cid, t)
 
 def _stock_monitor():
@@ -2954,7 +2999,7 @@ def fallback(msg):
 #  MAIN
 # ══════════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
-    logger.info("👑 OtpKing Pro v10 — DgOTP Only — Starting...")
+    logger.info("👑 OtpKing Pro v11 — DgOTP LIVE PRICES — Starting...")
     Thread(target=_stock_monitor, daemon=True).start()
     retry = 0
     while True:
