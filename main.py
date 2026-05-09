@@ -328,211 +328,182 @@ def get_usdt_rate(): return 85.0
 #  4. Price shown = dgotp raw price × 1.10 (10% margin)
 # ══════════════════════════════════════════════════════════════════════════════
 
-# ── VERIFIED PRICES FROM dgotp.in WEBSITE (images 3,4,5,6,7) ─────────────────
-# Key: (service_code, country_name) → raw dgotp INR price
-# Bot sell price = raw × 1.10
-DGOTP_PRICES = {
-    # ── WhatsApp ──
-    ("wa","russia"):       16,
-    ("wa","india"):        14,
-    ("wa","usa"):          44,
-    ("wa","england"):      58,
-    ("wa","ukraine"):      14,
-    ("wa","brazil"):       11,
-    ("wa","indonesia"):     9,
-    ("wa","kenya"):         9,
-    ("wa","nigeria"):       9,
-    ("wa","pakistan"):      9,
-    ("wa","cambodia"):      9,
-    ("wa","myanmar"):       9,
-    ("wa","vietnam"):      11,
-    ("wa","philippines"):  40,   # image 6: Philippines premium ₹40 (cheapest)
-    ("wa","bangladesh"):    9,
-    ("wa","kazakhstan"):    9,
-    ("wa","south_africa"): 35,   # image 5: from ₹38 → raw ~35
-    ("wa","canada"):       43,   # image 5: from ₹47 → raw ~43
-    ("wa","germany"):     175,
-    ("wa","israel"):      545,
-    ("wa","poland"):      206,
-    ("wa","egypt"):        94,
-    ("wa","ireland"):     442,
-    ("wa","laos"):         77,
-    ("wa","colombia"):    122,
-    ("wa","cameroon"):     48,
-    ("wa","argentina"):   144,
-    ("wa","croatia"):     262,
-    ("wa","iraq"):        154,
-    ("wa","chile"):        84,
-    ("wa","sri_lanka"):    73,
-    ("wa","belarus"):      48,
-    ("wa","afghanistan"):  48,
-    ("wa","iran"):         48,
-    ("wa","mali"):         48,
-    ("wa","mongolia"):     48,
-    ("wa","morocco"):      48,
-    ("wa","oman"):         48,
-    ("wa","romania"):      48,
-    ("wa","senegal"):      48,
-    ("wa","switzerland"):  48,
-    ("wa","tajikistan"):   48,
-    ("wa","togo"):         48,
-    ("wa","uzbekistan"):   48,
-    ("wa","venezuela"):    48,
-    # ── Telegram ──
-    ("tg","russia"):       14,
-    ("tg","india"):        12,
-    ("tg","usa"):          40,
-    ("tg","england"):      52,
-    ("tg","ukraine"):      12,
-    ("tg","cambodia"):      9,
-    ("tg","myanmar"):       9,
-    ("tg","indonesia"):     9,
-    ("tg","kazakhstan"):    9,
-    ("tg","vietnam"):       9,
-    ("tg","bangladesh"):    9,
-    ("tg","philippines"):   9,
-    # ── Instagram ──
-    ("ig","russia"):       18,
-    ("ig","india"):        16,
-    ("ig","usa"):          55,
-    ("ig","ukraine"):      16,
-    ("ig","brazil"):       14,
-    ("ig","indonesia"):    11,
-    ("ig","england"):      64,
-    ("ig","nigeria"):      11,
-    # ── Google/Gmail ──
-    ("go","russia"):       22,
-    ("go","india"):        20,
-    ("go","usa"):          64,
-    ("go","ukraine"):      20,
-    ("go","england"):      68,
-    ("go","indonesia"):    14,
-    # ── Facebook ──
-    ("fb","russia"):       16,
-    ("fb","india"):        14,
-    ("fb","usa"):          50,
-    ("fb","ukraine"):      14,
-    ("fb","indonesia"):    11,
-    ("fb","brazil"):       11,
-    # ── TikTok ──
-    ("tt","russia"):       16,
-    ("tt","usa"):          45,
-    ("tt","india"):        14,
-    ("tt","indonesia"):    11,
-    ("tt","brazil"):       11,
-    # ── Twitter ──
-    ("tw","russia"):       16,
-    ("tw","india"):        14,
-    ("tw","usa"):          45,
-    ("tw","england"):      55,
-    # ── Snapchat ──
-    ("sc","russia"):       20,
-    ("sc","usa"):          50,
-    ("sc","england"):      59,
-    ("sc","india"):        16,
-    # ── Amazon ──
-    ("az","russia"):       22,
-    ("az","india"):        20,
-    ("az","usa"):          64,
-    ("az","england"):      68,
-    # ── LinkedIn ──
-    ("li","russia"):       25,
-    ("li","india"):        22,
-    ("li","usa"):          68,
-    ("li","england"):      73,
+# ══════════════════════════════════════════════════════════════════════════════
+#  DGOTP.IN EXACT LIVE PRICES — Images se verified (8 May 2026)
+#  Bot sell price = raw_price × 1.10 (10% margin)
+#  Raw price = dgotp.in website pe jo price dikhta hai
+#  Country code = dgotp.in ke actual country IDs
+# ══════════════════════════════════════════════════════════════════════════════
+
+# dgotp.in WhatsApp country codes (confirmed from website)
+# Format: "country_name": ("dgotp_country_id", raw_inr_price)
+DGOTP_WA = {
+    # ── Top countries (image 5 — WhatsApp section) ─────────────────────────
+    "south_africa":  ("28",   38.00),
+    "philippines":   ("4",    40.00),   # cheapest operator ₹40 (image 6)
+    "indonesia":     ("6",    37.00),
+    "canada":        ("38",   47.00),
+    "india":         ("22",  100.00),
+    "usa":           ("187", 201.60),
+    "afghanistan":   ("93",   53.00),
+    "belarus":       ("29",   53.00),
+    "cambodia":      ("36",   53.00),
+    "germany":       ("43",  190.00),
+    "iran":          ("63",   53.00),
+    "mali":          ("142",  53.00),
+    "mongolia":      ("96",   53.00),
+    "morocco":       ("150",  53.00),
+    "oman":          ("164",  53.00),
+    # ── image 4 (continued) ────────────────────────────────────────────────
+    "tajikistan":    ("137",  53.00),
+    "togo":          ("141",  53.00),
+    "ukraine":       ("1",    53.00),
+    "uzbekistan":    ("76",   53.00),
+    "venezuela":     ("80",   53.00),
+    "kenya":         ("118",  56.00),
+    "vietnam":       ("15",   45.20),
+    # ── image 3 ────────────────────────────────────────────────────────────
+    "israel":        ("9",   596.93),
+    "poland":        ("11",  226.02),
+    "madagascar":    ("85",   54.94),
+    "nigeria":       ("109", 116.64),
+    "egypt":         ("86",  102.90),
+    "ireland":       ("56",  486.00),
+    "laos":          ("112",  85.00),
+    "colombia":      ("170", 133.77),
+    "cameroon":      ("120",  53.00),
+    "argentina":     ("59",  158.56),
+    "croatia":       ("182", 288.15),
+    # ── image 2 ────────────────────────────────────────────────────────────
+    "iraq":          ("163", 169.50),
+    "chile":         ("65",   92.88),
+    "brazil":        ("7",   100.00),
+    "sri_lanka":     ("155",  80.00),
+    "england":       ("16",   85.00),
+    # ── image 6 (more) ─────────────────────────────────────────────────────
+    "romania":       ("67",   53.00),
+    "senegal":       ("139",  53.00),
+    "switzerland":   ("13",   53.00),
+    # ── Additional from bot image 9 (bot showing ₹10 → these are ₹9 raw) ──
+    "russia":        ("0",    16.00),
+    "pakistan":      ("162",   9.00),
+    "myanmar":       ("26",    9.00),
+    "bangladesh":    ("10",    9.00),
+    "kazakhstan":    ("57",    9.00),
 }
+
+# dgotp.in prices for other services
+DGOTP_OTHER = {
+    # Telegram
+    ("tg","russia"):      ("0",    14.00),
+    ("tg","india"):       ("22",   12.00),
+    ("tg","usa"):         ("187",  40.00),
+    ("tg","england"):     ("16",   52.00),
+    ("tg","ukraine"):     ("1",    12.00),
+    ("tg","cambodia"):    ("36",    9.00),
+    ("tg","myanmar"):     ("26",    9.00),
+    ("tg","indonesia"):   ("6",     9.00),
+    ("tg","kazakhstan"):  ("57",    9.00),
+    ("tg","vietnam"):     ("15",    9.00),
+    ("tg","bangladesh"):  ("10",    9.00),
+    ("tg","philippines"): ("4",     9.00),
+    # Instagram
+    ("ig","russia"):      ("0",    18.00),
+    ("ig","india"):       ("22",   16.00),
+    ("ig","usa"):         ("187",  55.00),
+    ("ig","ukraine"):     ("1",    16.00),
+    ("ig","brazil"):      ("7",    14.00),
+    ("ig","indonesia"):   ("6",    11.00),
+    ("ig","england"):     ("16",   64.00),
+    ("ig","nigeria"):     ("109",  11.00),
+    # Google/Gmail
+    ("go","russia"):      ("0",    22.00),
+    ("go","india"):       ("22",   20.00),
+    ("go","usa"):         ("187",  64.00),
+    ("go","ukraine"):     ("1",    20.00),
+    ("go","england"):     ("16",   68.00),
+    ("go","indonesia"):   ("6",    14.00),
+    # Facebook
+    ("fb","russia"):      ("0",    16.00),
+    ("fb","india"):       ("22",   14.00),
+    ("fb","usa"):         ("187",  50.00),
+    ("fb","ukraine"):     ("1",    14.00),
+    ("fb","indonesia"):   ("6",    11.00),
+    ("fb","brazil"):      ("7",    11.00),
+    # TikTok
+    ("tt","russia"):      ("0",    16.00),
+    ("tt","usa"):         ("187",  45.00),
+    ("tt","india"):       ("22",   14.00),
+    ("tt","indonesia"):   ("6",    11.00),
+    ("tt","brazil"):      ("7",    11.00),
+    # Twitter/X
+    ("tw","russia"):      ("0",    16.00),
+    ("tw","india"):       ("22",   14.00),
+    ("tw","usa"):         ("187",  45.00),
+    ("tw","england"):     ("16",   55.00),
+    # Snapchat
+    ("sc","russia"):      ("0",    20.00),
+    ("sc","usa"):         ("187",  50.00),
+    ("sc","england"):     ("16",   59.00),
+    ("sc","india"):       ("22",   16.00),
+    # Amazon
+    ("az","russia"):      ("0",    22.00),
+    ("az","india"):       ("22",   20.00),
+    ("az","usa"):         ("187",  64.00),
+    ("az","england"):     ("16",   68.00),
+    # LinkedIn
+    ("li","russia"):      ("0",    25.00),
+    ("li","india"):       ("22",   22.00),
+    ("li","usa"):         ("187",  68.00),
+    ("li","england"):     ("16",   73.00),
+}
+
 DEFAULT_STOCK = 50
+
 
 # Price cache: key="cc|api" → (sell_price, stock, timestamp)
 _pc = {}
 
 
+def _get_price_data(cc, api):
+    """Returns (country_id, raw_price) for given cc + api"""
+    svc = DGOTP_SVC.get(api, '')
+    if svc == 'wa':
+        data = DGOTP_WA.get(cc)
+        if data:
+            return data[0], data[1]
+    else:
+        data = DGOTP_OTHER.get((svc, cc))
+        if data:
+            return data[0], data[1]
+    return DGOTP_CC.get(cc), None
+
+
 def _dgotp_price(cc, api):
-    """
-    dgotp.in se price fetch karo.
-    
-    Step 1: Website scraping try karo (live prices)
-    Step 2: Hardcoded prices use karo (always available)
-    
-    Returns: (sell_price_inr, stock) or (None, 0)
-    """
-    if not DGOTP_KEY:
-        logger.error("DGOTP_KEY not configured!")
+    """Returns (sell_price_inr, stock) — from dgotp.in verified price table"""
+    country_id, raw_price = _get_price_data(cc, api)
+    if not country_id:
         return None, 0
-    service = DGOTP_SVC.get(api)
-    country_id = DGOTP_CC.get(cc)
-    if not service or not country_id:
-        logger.error("No mapping: cc=%s api=%s", cc, api)
-        return None, 0
-
-    # ── Method 1: Website scraping for live prices ───────────────────────────
-    # dgotp.in website shows real prices — scrape them
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "X-Requested-With": "XMLHttpRequest",
-        }
-        # Try the numbers endpoint that the website uses internally
-        endpoints_to_try = [
-            f"https://dgotp.in/api/numbers?service={service}&country={country_id}",
-            f"https://dgotp.in/api/price?service={service}&country={country_id}",
-            f"https://dgotp.in/api/v1/prices?service={service}&country={country_id}",
-        ]
-        for url in endpoints_to_try:
-            try:
-                r = requests.get(url, headers=headers,
-                                 cookies={"DGOTP_KEY": DGOTP_KEY},
-                                 timeout=8)
-                raw = r.text.strip()
-                if raw and not raw.startswith('<') and r.status_code == 200:
-                    try:
-                        data = r.json()
-                        # Extract price from any format
-                        price = (data.get('price') or data.get('cost') or
-                                 data.get('min_price') or data.get('retail_price'))
-                        stock = (data.get('count') or data.get('stock') or
-                                 data.get('available') or DEFAULT_STOCK)
-                        if price and float(price) > 0:
-                            sell = math.ceil(float(price) * DGOTP_MARGIN)
-                            count = int(stock) if stock else DEFAULT_STOCK
-                            logger.info("✅ SCRAPE [%s/%s] raw=₹%s sell=₹%s", cc, api, price, sell)
-                            return sell, count
-                    except: pass
-            except: pass
-    except Exception as e:
-        logger.debug("Scrape attempt failed: %s", e)
-
-    # ── Method 2: Hardcoded prices (always reliable) ─────────────────────────
-    raw_price = DGOTP_PRICES.get((service, cc))
-    if raw_price:
-        sell = math.ceil(raw_price * DGOTP_MARGIN)
-        logger.info("✅ HARDCODED [%s/%s] raw=₹%s sell=₹%s stock=%s",
-                    cc, api, raw_price, sell, DEFAULT_STOCK)
+    if raw_price and raw_price > 0:
+        sell = round(raw_price * DGOTP_MARGIN, 0)
+        sell = int(sell)
+        logger.info("PRICE [%s/%s] raw=₹%.2f → sell=₹%d", cc, api, raw_price, sell)
         return sell, DEFAULT_STOCK
-
-    logger.warning("No price found for [%s/%s]", cc, api)
     return None, 0
 
 
 def best_price(cc, api):
-    """
-    Returns (sell_price, stock, source, _, _)
-    Uses 10-min cache for performance.
-    """
+    """Returns (sell, stock, source, _, _)"""
     k = f"{cc}|{api}"
-    cached = _pc.get(k)
-    if cached and time.time() - cached[2] < 600:
-        return cached[0], cached[1], 'live', cached[1], 0
-
+    c = _pc.get(k)
+    if c and time.time() - c[2] < 3600:
+        return c[0], c[1], 'live', c[1], 0
     sell, stock = _dgotp_price(cc, api)
     if sell and stock > 0:
         _pc[k] = (sell, stock, time.time())
         return sell, stock, 'live', stock, 0
-
-    if cached:
-        return cached[0], cached[1], 'cached', cached[1], 0
-
+    if c:
+        return c[0], c[1], 'cached', c[1], 0
     return None, 0, None, 0, 0
 
 
@@ -544,169 +515,106 @@ def smart_buy(cc, api):
 
 
 def _dgotp_buy(cc, api):
-    """
-    dgotp.in se number buy karo.
-    CONFIRMED working: action=getNumber
-    Returns (order_id, phone_number) or (None, None)
-    """
+    """dgotp.in getNumber — Returns (order_id, phone) or (None, None)"""
     if not DGOTP_KEY:
-        logger.error("DGOTP_KEY not set!")
         return None, None
-    country = DGOTP_CC.get(cc)
+    country_id, _ = _get_price_data(cc, api)
     service = DGOTP_SVC.get(api)
-    if not country or not service:
-        logger.error("Buy: no mapping cc=%s->%s api=%s->%s", cc, country, api, service)
+    if not country_id or not service:
+        logger.error("Buy no mapping: cc=%s api=%s cid=%s svc=%s", cc, api, country_id, service)
         return None, None
 
-    # dgotp.in confirmed working buy params
-    attempts = [
-        # Attempt 1: Basic (most likely to work)
-        {"api_key": DGOTP_KEY, "action": "getNumber",
-         "service": service, "country": country},
-        # Attempt 2: With operator=any
-        {"api_key": DGOTP_KEY, "action": "getNumber",
-         "service": service, "country": country, "operator": "any"},
-        # Attempt 3: With operator=0 (first operator)
-        {"api_key": DGOTP_KEY, "action": "getNumber",
-         "service": service, "country": country, "operator": "0"},
-    ]
-
-    for i, params in enumerate(attempts):
+    for i, params in enumerate([
+        {"api_key": DGOTP_KEY, "action": "getNumber", "service": service, "country": country_id},
+        {"api_key": DGOTP_KEY, "action": "getNumber", "service": service, "country": country_id, "operator": "any"},
+        {"api_key": DGOTP_KEY, "action": "getNumber", "service": service, "country": country_id, "operator": "0"},
+    ]):
         try:
-            logger.info("Buy %d/%d: cc=%s(%s) svc=%s(%s)",
-                        i+1, len(attempts), cc, country, api, service)
-            r = requests.get(DGOTP_BASE, params=params, timeout=30)
+            logger.info("Buy %d: cid=%s svc=%s", i+1, country_id, service)
+            r   = requests.get(DGOTP_BASE, params=params, timeout=30)
             txt = r.text.strip()
-            logger.info("Buy response %d: [%s]", i+1, txt)
+            logger.info("Buy resp %d: [%s]", i+1, txt)
 
-            # ✅ SUCCESS: ACCESS_NUMBER:id:phone
             if txt.startswith("ACCESS_NUMBER:"):
-                parts = txt.split(":")
-                if len(parts) >= 3:
-                    oid = parts[1].strip()
-                    num = parts[2].strip()
-                    # Clean phone — remove non-digits except +
-                    num = ''.join(c for c in num if c.isdigit() or c == '+')
+                pts = txt.split(":")
+                if len(pts) >= 3:
+                    oid = pts[1].strip()
+                    num = ''.join(c for c in pts[2].strip() if c.isdigit() or c == '+')
                     if oid and num and len(num) >= 6:
-                        # Tell dgotp.in we're ready (setStatus=1)
                         try:
                             requests.get(DGOTP_BASE,
                                 params={"api_key": DGOTP_KEY, "action": "setStatus",
-                                        "status": "1", "id": oid},
-                                timeout=10)
+                                        "status": "1", "id": oid}, timeout=10)
                         except: pass
-                        logger.info("✅ BUY SUCCESS oid=%s num=%s", oid, num)
+                        logger.info("✅ BUY OK oid=%s num=%s", oid, num)
                         return oid, num
 
-            # JSON response (some versions)
             if txt and txt[0] in ('{', '['):
                 try:
                     j = r.json()
-                    if isinstance(j, dict):
-                        oid = str(j.get("activationId") or j.get("id") or
-                                  j.get("orderId") or "")
-                        num = str(j.get("phoneNumber") or j.get("number") or
-                                  j.get("phone") or "")
-                        num = ''.join(c for c in num if c.isdigit() or c == '+')
-                        if oid and oid != "None" and num and len(num) >= 6:
-                            logger.info("✅ BUY JSON SUCCESS oid=%s num=%s", oid, num)
-                            return oid, num
+                    oid = str(j.get("activationId") or j.get("id") or "")
+                    num = ''.join(c for c in str(j.get("phoneNumber") or j.get("number") or "")
+                                  if c.isdigit() or c == '+')
+                    if oid and oid != "None" and num and len(num) >= 6:
+                        logger.info("✅ BUY JSON OK oid=%s num=%s", oid, num)
+                        return oid, num
                 except: pass
 
-            # Terminal errors — stop
             if txt == "NO_BALANCE":
-                logger.error("❌ NO_BALANCE!")
                 try:
                     bot.send_message(OWNER_ID,
-                        "🚨 *DgOTP Balance Khatam!*\n"
-                        f"Service: `{api}` Country: `{cc}`\n\n"
-                        "👉 https://dgotp.in/dashboard mein recharge karo!")
+                        f"🚨 *DgOTP Balance Khatam!*\nService:`{api}` Country:`{cc}`\n"
+                        "👉 dgotp.in/dashboard recharge karo!")
                 except: pass
                 return None, None
-
             if txt in ("BAD_KEY", "WRONG_KEY", "ERROR_WRONG_KEY"):
-                logger.error("❌ BAD KEY!")
-                try:
-                    bot.send_message(OWNER_ID,
-                        "🚨 *DgOTP API Key Invalid!*\n\n"
-                        "dgotp.in → API → New key copy karo\n"
-                        "Railway variables mein `DGOTP_API_KEY` update karo!")
-                except: pass
+                logger.error("BAD KEY!")
                 return None, None
-
-            # Retriable
             if txt == "NO_NUMBERS":
-                logger.warning("NO_NUMBERS attempt %d: %s/%s", i+1, cc, api)
                 continue
-
-            if txt == "WRONG_COUNTRY_ID":
-                logger.error("WRONG_COUNTRY_ID: cc=%s country_code=%s", cc, country)
+            if txt == "WRONG_COUNTRY_ID" or txt.startswith("BAD_"):
                 break
-
-            if txt.startswith("BAD_"):
-                logger.error("BAD response %d: %s", i+1, txt)
-                break
-
-            logger.warning("Unknown response %d: [%s]", i+1, txt)
-
         except requests.Timeout:
-            logger.error("Buy TIMEOUT attempt %d", i+1)
+            logger.error("Buy TIMEOUT %d", i+1)
         except Exception as e:
-            logger.error("Buy exception %d: %s", i+1, e)
+            logger.error("Buy error %d: %s", i+1, e)
 
-    logger.error("❌ BUY FAILED: %s/%s", cc, api)
+    logger.error("❌ BUY FAILED: %s/%s cid=%s", cc, api, country_id)
     return None, None
 
 
 def check_otp(oid, source):
-    """
-    dgotp.in getStatus — OTP check karo
-    Returns otp_code string or None
-    """
+    """dgotp.in getStatus — OTP fetch"""
     if source != 'dgotp':
         return None
     try:
-        r = requests.get(DGOTP_BASE,
+        r   = requests.get(DGOTP_BASE,
             params={"api_key": DGOTP_KEY, "action": "getStatus", "id": str(oid)},
             timeout=15)
         txt = r.text.strip()
-        logger.debug("getStatus [%s]: [%s]", oid, txt)
-
-        # Format 1: STATUS_OK:123456
+        logger.debug("OTP check [%s]: [%s]", oid, txt)
         if txt.startswith("STATUS_OK:"):
             code = txt.split(":", 1)[1].strip()
             if code and len(code) >= 3:
                 logger.info("✅ OTP [%s]: %s", oid, code)
                 return code
-
-        # Format 2: plain digits
         if txt.isdigit() and len(txt) >= 3:
-            logger.info("✅ OTP plain [%s]: %s", oid, txt)
             return txt
-
-        # Format 3: JSON
         if txt and txt[0] == '{':
             try:
-                j = r.json()
-                code = str(j.get("smsCode") or j.get("code") or
-                           j.get("otp") or j.get("sms") or "")
+                j    = r.json()
+                code = str(j.get("smsCode") or j.get("code") or j.get("otp") or "")
                 if code and code not in ("None","null","") and len(code) >= 3:
-                    logger.info("✅ OTP JSON [%s]: %s", oid, code)
                     return code
             except: pass
-
-        # Format 4: SOMETHING:DIGITS
-        if ":" in txt and not any(txt.startswith(x) for x in
-                                  ("STATUS_WAIT","STATUS_CANCEL","STATUS_OK")):
+        if ":" in txt and not any(txt.startswith(x) for x in ("STATUS_WAIT","STATUS_CANCEL","STATUS_OK")):
             last = txt.split(":")[-1].strip()
             if last.isdigit() and len(last) >= 3:
-                logger.info("✅ OTP colon [%s]: %s", oid, last)
                 return last
-
     except requests.Timeout:
-        logger.warning("getStatus TIMEOUT [%s]", oid)
+        logger.warning("OTP TIMEOUT [%s]", oid)
     except Exception as e:
-        logger.error("getStatus error [%s]: %s", oid, e)
+        logger.error("OTP error [%s]: %s", oid, e)
     return None
 
 def cancel_order_api(oid, source):
@@ -1067,7 +975,7 @@ def cmd_testapi(msg):
                 results.append(f"❌ getNumber error: {e}")
 
         # Show hardcoded price
-        raw = DGOTP_PRICES.get((DGOTP_SVC.get(api_name,''), cc_name))
+        cid, raw = _get_price_data(cc_name, api_name); raw = raw or 0
         if raw:
             results.append(f"\n💰 Hardcoded price: ₹{raw} → sell ₹{math.ceil(raw*DGOTP_MARGIN)}")
         else:
@@ -1322,22 +1230,45 @@ def cb_buy(call):
             daemon=True).start()
 
     else:
-        # ── FAIL — APIs ka balance nahi / down ───────────────────────────────
-        # User ka balance nahi kata — completely safe
+        # ── FAIL — No stock on dgotp.in for this country/service ─────────────
+        # User ka balance NAHI kata — completely safe
+
+        # Find alternative countries for same service with price available
+        alternatives = []
+        for alt_key, alt_info in SERVICES.get(cat, {}).items():
+            if alt_key == key: continue
+            if alt_info['api'] != svc['api']: continue
+            alt_sell, alt_stock, _, _, _ = best_price(alt_info['cc'], alt_info['api'])
+            if alt_sell and alt_stock > 0:
+                alternatives.append((alt_key, alt_info, alt_sell))
+            if len(alternatives) >= 3: break
+
         mk = types.InlineKeyboardMarkup(row_width=1)
-        mk.add(types.InlineKeyboardButton("🔄 Dobara Try Karein", callback_data=f"buy_{key}"))
-        mk.add(types.InlineKeyboardButton("📞 Support",
+        mk.add(types.InlineKeyboardButton(
+            f"🔄 Dobara Try Karein ({svc['country']})",
+            callback_data=f"buy_{key}"))
+        for alt_key, alt_info, alt_sell in alternatives:
+            mk.add(types.InlineKeyboardButton(
+                f"{alt_info['flag']} {alt_info['country']} — ₹{alt_sell} Try Karein",
+                callback_data=f"buy_{alt_key}"))
+        mk.add(types.InlineKeyboardButton(
+            "📞 Support",
             url=f"https://t.me/{SUPPORT_BOT.replace('@','')}"))
+
+        alt_text = ""
+        if alternatives:
+            alt_names = " | ".join(f"{a[1]['flag']}{a[1]['country']}" for a in alternatives)
+            alt_text  = f"\n\n💡 *Yeh try karein:* {alt_names}"
+
         bot.edit_message_text(
             f"⚠️ *Number Abhi Nahi Mila*\n\n"
             f"{svc['flag']} {svc['country']} | {cat}\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"📋 Kya hua:\n"
-            f"• APIs ka balance temporarily khatam ho sakta hai\n"
-            f"• Ya is waqt us country ka stock nahi hai\n\n"
-            f"✅ *Aapka ₹{sell:.0f} balance bilkul safe hai*\n"
-            f"_Kuch nahi kata_\n\n"
-            f"👇 Dobara try karein ya admin se contact karein:",
+            f"❌ Kya hua: Is waqt dgotp.in pe\n"
+            f"   *{svc['country']} ka stock nahi hai*\n\n"
+            f"✅ *Aapka ₹{sell:.0f} balance safe hai*\n"
+            f"_Kuch nahi kata_{alt_text}\n\n"
+            f"👇 Doosri country ya dobara try karein:",
             call.message.chat.id, sm.message_id, reply_markup=mk)
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2283,9 +2214,8 @@ def cb_lpc_check(call):
 
     _pc.pop(f"{cc}|{api}", None)
 
-    # Use hardcoded price (getPrices returns BAD_ACTION on dgotp.in)
-    svc = DGOTP_SVC.get(api, '')
-    raw_price = DGOTP_PRICES.get((svc, cc))
+    # Get price from verified dgotp.in price table
+    country_id, raw_price = _get_price_data(cc, api)
     pdg_raw = float(raw_price) if raw_price else 0
     sdg     = DEFAULT_STOCK if raw_price else 0
 
